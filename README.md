@@ -15,7 +15,7 @@ same task: 75.1. Details in E17 below and in `EXPERIMENTS.md`.
 
 ## Demo
 
-**Live triage in the browser** — `luce serve … --review review.jsonl` also serves `/demo`: support tickets stream into an
+**[Try it in your browser](https://huggingface.co/spaces/noscienthoon/luce-live-triage)** (no GPU, replays recorded model outputs). **Live triage** — `luce serve … --review review.jsonl` also serves `/demo`: support tickets stream into an
 inbox and the model answers three typed questions per ticket (queue, priority, anger) with calibrated probability bars,
 per-ticket latency and running GPU cost; answers under 0.9 confidence drop into a review queue for a human; the text
 box re-scores a ticket as you type. Qwen3-4B-Base + LoRA on one RTX 4070 SUPER. The recording below replays answers
