@@ -1,10 +1,28 @@
-# Launch drafts (paste-ready; the account holder decides whether to post)
+# Launch drafts
+
+No X/Threads account needed. Channels that work without one:
+- **GitHub / HF** (lists, tracker, issues on the benchmarks we reused) — already done by the agent, see `EXPERIMENTS.md` E17 and the links below.
+- **Show HN** — the one worth doing by hand: an account takes a minute, no followers needed, submissions are ranked by the post not the poster. Title + first comment below.
+- **GeekNews (news.hada.io)** — Korean HN, link submission only.
+- **Letting others carry it** — list maintainers, the jev-exploration ledger and newsletters scrape this space; being listed with results is what gets picked up.
+
+Done already (agent, no personal account):
+[awesome-jev PR #65](https://github.com/yibie/awesome-jev/pull/65) · [awesome-typesafe PR #61](https://github.com/AbdelStark/awesome-typesafe/pull/61) · [jev-exploration #10 comment](https://github.com/SamuelSacco/jev-exploration/issues/10) · [jev-phishing-bench #1](https://github.com/anisselbd/jev-phishing-bench/issues/1) · [system-one-open #1](https://github.com/mithalouni/system-one-open/issues/1) · [NanoJev #9](https://github.com/TianyuCodings/NanoJev/issues/9) · tracker Space PR #5 comment
 
 Canonical link: https://github.com/scienthoon/luce · Demo (no GPU): https://huggingface.co/spaces/noscienthoon/luce-live-triage · Checkpoint: https://huggingface.co/noscienthoon/ouro-2.6b-decision-lora
 
-## Show HN (title ≤ 80 chars)
+## Show HN — 15 minutes
+
+1. Account: https://news.ycombinator.com/login (username + password, no e-mail needed).
+2. Submit: https://news.ycombinator.com/submit — URL `https://github.com/scienthoon/luce`, title below, text field empty.
+3. Immediately post the first comment below as a reply to your own post (HN convention: context goes in a comment, not the title).
+4. Best window: Tue–Thu 08:00–10:00 US Eastern = 21:00–23:00 KST. Stay around for an hour or two to answer.
+
+### Title (≤ 80 chars)
 
 **Show HN: Luce – describe a decision task, get a calibrated model; 91% on rule-generated gold vs Jev's 75%**
+
+### First comment (post as a reply to your own submission)
 
 Luce is an open recipe (Apache-2.0) for TypeSafe-Jev-style decision models: a sentence about the task → an LLM writes the
 training data → LoRA + a small decision head on Qwen3-4B-Base → typed probabilities (choice / ordered score / boolean),
@@ -20,11 +38,9 @@ The honest summary is in the README: where the label is a function of the input,
 beat the zero-shot model by 20–35 points; where it is not (policy-assigned priority, three-step lookahead), training
 adds little. Trains on a 12 GB card in 20–70 minutes. Every number has its experiment log entry.
 
-## Threads / X reply (under the Jev use-case thread)
+Demo in the browser, no GPU (replays recorded model outputs): https://huggingface.co/spaces/noscienthoon/luce-live-triage
 
-같은 걸 오픈으로: 과제를 문장으로 쓰면 LLM이 데이터를 만들고, 4B 모델에 LoRA+결정 헤드를 얹어 확률로 답하는 레시피(Luce).
-규칙 기반 티켓에서 LLM이 쓴 3,000개로 학습 → 정답 2,964개에서 91.1% (Jev 0샷 75.1). 12GB 카드 40분.
-데모(GPU 없이 재생): huggingface.co/spaces/noscienthoon/luce-live-triage · 코드: github.com/scienthoon/luce
+Likely questions, answered up front: `pip install luce` is not live yet, use `pip install "git+https://github.com/scienthoon/luce"`. The comparison is not apples to apples — Jev is zero-shot, we train — which is the point: the README states it on every row. The GitHub-issue task is where training barely helps, and that is in the table too.
 
 ## r/LocalLLaMA
 
