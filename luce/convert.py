@@ -208,11 +208,11 @@ _NSMC_URLS = {
 def _nsmc_rows(split: str):
     """
     NSMC 는 HF 허브에서 스크립트 기반이라 datasets>=3 에서 로드되지 않는다.
-    원본 GitHub 의 TSV (id, document, label) 를 직접 받아 ~/.cache/jevlocal/nsmc/ 에 캐시한다.
+    원본 GitHub 의 TSV (id, document, label) 를 직접 받아 ~/.cache/luce/nsmc/ 에 캐시한다.
     """
     import urllib.request
     url = _NSMC_URLS[split]
-    cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "jevlocal", "nsmc")
+    cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "luce", "nsmc")
     os.makedirs(cache_dir, exist_ok=True)
     path = os.path.join(cache_dir, os.path.basename(url))
     if not os.path.exists(path):
@@ -293,11 +293,11 @@ _BANKING77_URLS = {
 def _banking77_rows(split: str) -> List[Dict[str, str]]:
     """
     HF 의 PolyAI/banking77 은 스크립트 기반이라 datasets>=3 에서 로드되지 않는다.
-    원본 GitHub CSV (text, category) 를 받아 ~/.cache/jevlocal/banking77/ 에 캐시한다. CC BY 4.0.
+    원본 GitHub CSV (text, category) 를 받아 ~/.cache/luce/banking77/ 에 캐시한다. CC BY 4.0.
     """
     import urllib.request
     url = _BANKING77_URLS[split]
-    cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "jevlocal", "banking77")
+    cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "luce", "banking77")
     os.makedirs(cache_dir, exist_ok=True)
     path = os.path.join(cache_dir, f"{split}.csv")
     if not os.path.exists(path):
@@ -510,7 +510,7 @@ def _subsample(rows: List[Dict[str, Any]], limit: Optional[int], seed: int, name
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="build jevlocal JSONL datasets")
+    parser = argparse.ArgumentParser(description="build luce JSONL datasets")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_syn = sub.add_parser("synthetic", help="규칙 기반 합성 스모크 데이터")

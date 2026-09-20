@@ -8,6 +8,11 @@ Luce is the open recipe for doing that with *your* task: `luce init` scaffolds t
 
 Three question types, same as TypeSafe's Jev interface: **Choice** (one of N options), **Score** (an ordered scale), **Noul** (a statement is true or false).
 
+**Does the sentence → data → model path actually work?** Yes: 3,000 tickets written by an LLM from a one-paragraph
+description of the organisation's rules, 2 epochs of Qwen3-4B-Base on one RTX 4070 SUPER, then tested on 2,964 tickets
+with rule-generated gold labels: **91.1 %** (queue 100 / anger 98.6 / priority 74.6), ECE 0.022. Jev zero-shot on the
+same task: 75.1. Details in E17 below and in `EXPERIMENTS.md`.
+
 ## Demo
 
 **Live triage in the browser** — `luce serve … --review review.jsonl` also serves `/demo`: support tickets stream into an
@@ -34,7 +39,8 @@ The same run as a terminal cast, and the training run that produced the checkpoi
 ## 60-second quickstart
 
 ```bash
-pip install luce
+pip install "git+https://github.com/scienthoon/luce"        # PyPI release pending; with embedding dedup:
+# pip install "luce[synth] @ git+https://github.com/scienthoon/luce"
 
 luce init "Route customer support tickets to a queue, rate urgency, flag angry customers" \
     --examples examples.jsonl \
@@ -189,7 +195,12 @@ ByteDance/Ouro-2.6B with `total_ut_steps: 4`).
 
 ## Hardware
 
-Qwen2.5-3B in bf16 is 6 GB; training with LoRA and gradient checkpointing fits a 16 GB card (RTX 4080: 8,100 synthetic tickets × 2 epochs in 13 minutes; cross modes take 3–5× longer because each option re-encodes the state). Qwen2.5-1.5B fits with room to spare. Apple Silicon works for inference and small runs (MPS, bf16). Inference: one request with three questions is ~40 ms on a 4090 in `bi` mode with the option cache warm.
+The default backbone, Qwen3-4B-Base, trains with LoRA and gradient checkpointing on a **12 GB card**: each of the four
+tasks in E17 ran on one RTX 4070 SUPER in 20–70 minutes (peak 10.7 GB with 768-token inputs at batch 1, ~9 GB at
+512 tokens and batch 2–4). On an RTX 4090 the same runs are 2–3× faster. Inference is one forward pass per option:
+0.25–0.30 s for a three-question ticket on the 4070 SUPER, 8 s to load. Qwen3-1.7B-Base and 0.6B-Base fit easily
+(see Backbone above for what they cost in accuracy); Qwen2.5-3B (used for E0–E13) needs a 16 GB card for the older
+cross modes.
 
 ## Things to know before you build on it
 
@@ -200,9 +211,14 @@ Qwen2.5-3B in bf16 is 6 GB; training with LoRA and gradient checkpointing fits a
 
 ## Prior and related work
 
-- [openjev](https://github.com/TheoLeeCJ/openjev), [system-one-open](https://github.com/search?q=system-one-open), [NanoJev](https://github.com/TianyuCodings/NanoJev), [decider](https://github.com/Mapika/decider), [so1](https://github.com/search?q=so1+jev): open reproductions of the Jev-style interface. Luce differs in the front door (task description → synthetic data → trained head) and in the evaluation discipline (real-label calibration, noise-floored ECE, in-synth tagging), not in the scoring architecture.
-- [jev-exploration](https://github.com/SamuelSacco/jev-exploration): ledger of independent Jev measurements; our contribution is [jev-ood-calibration](https://github.com/scienthoon/jev-ood-calibration).
-- [Hugging Face synthetic-data-generator](https://github.com/argilla-io/synthetic-data-generator) and [Prompt2Model](https://github.com/neulab/prompt2model): the same "describe → synthesize → train" idea for general NLP; Luce applies it to typed decision heads with calibrated probabilities.
+- Open Jev replicas: [TheoLeeCJ/openjev](https://github.com/TheoLeeCJ/openjev) and [AlexWortega/openjev](https://huggingface.co/AlexWortega/openjev),
+  [mithalouni/system-one-open](https://github.com/mithalouni/system-one-open) (Gemma 4 E2B, 92 public datasets; its harness rebuilds the TypeSafe public eval we report on),
+  [TianyuCodings/NanoJev](https://github.com/TianyuCodings/NanoJev) (0.6B, mazes), [Mapika/decider](https://github.com/Mapika/decider),
+  [ikermoel/open-alternative-jev](https://github.com/ikermoel/open-alternative-jev) (so1). Luce differs in starting from a task description and a teacher rather than a fixed dataset mix, and in reporting calibration next to accuracy.
+- Benchmarks we reuse: [anisselbd/jev-phishing-bench](https://github.com/anisselbd/jev-phishing-bench) (PhishNChips set),
+  [C-Tianyu/NanoJev-Data](https://huggingface.co/datasets/C-Tianyu/NanoJev-Data) (mazes), [evals.typesafe.ai](https://evals.typesafe.ai) (TypeSafe public eval).
+- [SamuelSacco/jev-exploration](https://github.com/SamuelSacco/jev-exploration): ledger of independent Jev measurements; ours is [jev-ood-calibration](https://github.com/scienthoon/jev-ood-calibration).
+- [argilla-io/synthetic-data-generator](https://github.com/argilla-io/synthetic-data-generator) and [neulab/prompt2model](https://github.com/neulab/prompt2model): the same "describe → synthesize → train" idea for general NLP.
 - TypeSafe's Jev is the reference product: [typesafe.ai](https://typesafe.ai). "Jev" and "System One" are their names; Luce uses them only descriptively.
 
 ## Repository layout
@@ -210,7 +226,7 @@ Qwen2.5-3B in bf16 is 6 GB; training with LoRA and gradient checkpointing fits a
 - `luce/` the package: `config.py` (luce.yaml, mode/backbone decisions), `scaffold.py` (`luce init`), `synth.py` + `synth_run.py` (`luce synth`), `train.py`, `eval.py`, `model.py` (backbone + LoRA + decision head), `decision.py` (engine), `server.py` (FastAPI), `convert.py` (dataset presets), `core.py` (prompting baseline).
 - `tests/` torch-free unit tests (CI). `scripts/` benchmark harnesses (TypeSafe public eval rebuild, Jev via Vercel AI Gateway, four-task data collection).
 - `EXPERIMENTS.md` every number in this README with data, backbone, epochs, seed, hardware and time. `LUCE_PLAN.md` the v0.2 spec and status. `docs/` architecture and synth notes.
-- Not in the repo: data, checkpoints, logs (regenerate with `luce convert` / `luce synth`; example checkpoints are on the Hub).
+- Not in the repo: data, checkpoints, logs (regenerate with `luce convert` / `luce synth`). Published checkpoint: [noscienthoon/ouro-2.6b-decision-lora](https://huggingface.co/noscienthoon/ouro-2.6b-decision-lora) (Ouro-2.6B, ARC+BoolQ, with a standalone `inference.py`).
 
 ## Contributing
 

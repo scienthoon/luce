@@ -29,7 +29,7 @@ all = ["openai>=1.40", "datasets>=2.20"]
 luce = "luce.cli:main"
 
 [tool.setuptools]
-packages = ["luce", "jevlocal"]
+packages = ["luce"]
 
 [tool.setuptools.package-data]
 luce = ["demo.html", "demo_tickets.json", "demo_replay.json"]
