@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "luce"
+version = "0.2.0"
+description = "Train a 1%-parameter decision head on an open LLM and serve typed Choice / Score / Noul probabilities. Describe the task, synthesize data with a teacher LLM, train, evaluate on real labels, serve."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = [
+    "torch>=2.2",
+    "transformers>=4.45",
+    "accelerate>=0.30",
+    "peft>=0.12",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+synth = ["openai>=1.40"]
+hf = ["datasets>=2.20"]
+all = ["openai>=1.40", "datasets>=2.20"]
+
+[project.scripts]
+luce = "luce.cli:main"
+
+[tool.setuptools]
+packages = ["luce", "jevlocal"]

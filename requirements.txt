@@ -1,0 +1,8 @@
+torch>=2.2
+transformers>=4.45
+accelerate>=0.30
+peft>=0.12
+datasets>=2.20
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.0

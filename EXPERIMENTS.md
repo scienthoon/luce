@@ -1,0 +1,449 @@
+# EXPERIMENTS.md — jevlocal 실험 일지
+
+프로젝트: Jev 스타일 System One(결정) 모델의 로컬 재현. 백본 Qwen2.5-3B, 학습 파라미터 약 1% (LoRA r16 + 헤드).
+장비: RTX 4080 16GB(주), RTX 4090 원격 인스턴스(병렬 실행), M1 Max(v0 데모).
+기록 원칙: 모든 정확도/ECE는 같은 검증셋, 같은 백본에서 비교. 별도 표기 없으면 temperature 보정 후.
+
+---
+
+## 2026-09-19
+
+### E0. v0 로그확률 엔진 동작 확인 (M1 Max, MPS, Qwen2.5-7B-Instruct)
+학습 없음. `Answer:` 뒤 다음 토큰 로짓 중 라벨(A/B/C) 확률만 읽음.
+
+| 질문 | 결과 | confidence |
+|---|---|---|
+| 현관문 40분 열림 → warn | noul 1.00 | 0.99 |
+| 영역 | security 1.00 | 1.00 |
+| 긴급도 | Today 0.81, Right now 0.18 | 0.52 |
+| 이중 결제 → 큐 | billing 1.00 | 1.00 |
+| 우선순위 | High 0.85, Critical 0.15 | 0.68 |
+| 수동 환불 검토 | noul 0.94 | 0.67 |
+| 고객이 화났는가 | noul 0.44 | 0.01 |
+| 수학 객관식 (정답 c=6) | c 0.92 | 0.76 |
+
+- 로드 19초, 첫 호출 9.3초(MPS 워밍업), 이후 4개 질문 1.9초.
+- 판단은 전부 상식과 일치. "화났는가" 0.44 / conf 0.01은 경계 사례에 대한 정직한 불확실성.
+- 문제: 1.00이 다수 → instruct 모델의 캘리브레이션 붕괴(softmax 포화).
+- 버그: dtype 기본값이 cuda 외 fp32라 7B가 28GB로 돌았음. → mps 자동 감지 + fp16으로 수정.
+
+### E1. v2 bi-encoder, 합성 데이터 (4080, Qwen2.5-3B)
+LM 헤드 제거. 질문(state+question)과 선택지를 따로 인코딩해 PairScorer([q,k,q·k,|q−k|] MLP)로 점수.
+데이터: 규칙 기반 합성 티켓 3,000 state × 3 질문(queue/priority/angry), 라벨 노이즈 5%.
+
+- 13분(다운로드 포함), epoch당 6.3분, 전기료 약 $0.06, GPU 7.5/16GB.
+- val 900: 정확도 95.9%(노이즈 상한 근처), NLL 0.259, Brier 0.093, ECE 0.067 (T=0.94).
+- 타입별: choice 95.3 (ECE 0.03), noul 95.0 (0.02), score 97.3 (0.15).
+- 추론: 3개 질문 첫 호출 234ms, 선택지 캐시 이후 38ms. 로드 2.6초.
+- 배포 확인: `JEVLOCAL_ENGINE=decision` 서버 /health, /v1/ask 정상.
+- "Do you ship to Canada?" → general 0.993: 정답(합성 템플릿상 general).
+
+### E2. v0 vs v2, 합성 데이터 (같은 백본, 같은 900 val, 둘 다 최적 T)
+
+| 지표 | v0 n_perm=1 | v0 n_perm=4 | v2 bi |
+|---|---|---|---|
+| 정확도 전체 | 61.9 | 63.9 | 95.9 |
+| choice | 86.3 | 93.0 | 95.3 |
+| noul | 64.0 | 64.3 | 95.0 |
+| score | 35.3 | 34.3 | 97.3 |
+| NLL | 0.758 | 0.735 | 0.259 |
+| Brier | 0.444 | 0.424 | 0.093 |
+| ECE | 0.120 | 0.105 | 0.067 |
+| T | 1.02 | 0.85 | 0.94 |
+
+발견:
+- 라벨 위치 편향: v0 choice가 n_perm 1→4에서 86.3→93.0 (+7%p). 로그확률 읽기 방식의 구조적 손실.
+- noul/score에서 v0 붕괴: 라벨이 사전학습에 없는 규칙으로 정해지면 학습 없는 모델은 맞출 이유가 없음.
+- v0의 0.53~0.73 확신 구간에 정확도가 0.25~0.35 낮은 과신 덩어리. 스칼라 temperature로 안 잡힘. v2는 그 구간이 비어 있음.
+- 한계: 합성 규칙을 배운 결과. 실제 데이터 비교 필요.
+
+### E3. Score 소프트 타겟 ablation (sigma 0.5 → 0, 같은 seed/데이터)
+
+| 지표 | sigma 0.5 | sigma 0 |
+|---|---|---|
+| 정확도 | 95.9 / 95.3 / 95.0 / 97.3 | 동일 |
+| NLL | 0.259 | 0.201 |
+| Brier | 0.093 | 0.079 |
+| ECE 전체 | 0.067 | 0.003 |
+| ECE score | 0.147 | 0.005 |
+| ECE choice / noul | 0.031 / 0.025 | 0.006 / 0.006 |
+| MCE | 0.278 | 0.018 |
+| T | 0.94 | 1.21 |
+
+- Score ECE 0.15는 모델이 아니라 설계 탓: 거리 인지 소프트 타겟(정답 확률 ≈0.79)에 정직하게 맞춘 것을 argmax 기준 ECE가 과소확신으로 읽음.
+- 부수 효과: score만 바꿨는데 choice/noul ECE도 개선. 전역 temperature 하나가 타입 간 타겟 날카로움 차이에 끌려다녔기 때문. 타입을 섞어 학습하면 타겟 날카로움을 맞춰야 전역 보정이 작동한다.
+- ECE 0.003은 900개/15 bin 측정 한계 아래. "구분 가능한 오차 없음"으로만 읽을 것.
+- 결정: `--score-sigma` 기본값 0.5 → 0.
+
+### E4. 실제 데이터 v0 기준선 (Qwen2.5-3B base)
+train: boolq 9,427 + arc_easy 2,251 = 11,678. val: boolq 2,000 + arc_easy 570 = 2,570.
+
+| 지표 | v0 n_perm=1 | v0 n_perm=4 (보정) |
+|---|---|---|
+| [arc_easy] 정확도 | 91.6 | 93.0 |
+| [arc_easy] ECE | 0.034 | 0.041 |
+| [boolq] 정확도 | 78.8 | 80.3 |
+| [boolq] ECE | 0.026 | 0.030 |
+| 전체 NLL | 0.408 | 0.379 |
+| T | 0.89 | 0.87 |
+
+- 합성과 완전히 다른 그림: 지식형 과제에서 사전학습 LM 로그확률은 이미 정직함(Kadavath 2022와 일치).
+- 위치 편향은 여기서도: n_perm 4가 ARC 1.4%p, BoolQ 1.5%p.
+- 주의: ARC/BoolQ는 사전학습 코퍼스에 섞여 있을 가능성(오염) → 공개 벤치마크는 v0에 유리하게 기운 시험.
+- 판정 기준 재설정: v2가 BoolQ에서 v0 이상, ARC에서 1~2%p 이내, ECE 동급이면 통과.
+
+### E5. v2 bi-encoder, 실제 데이터
+
+| | v0 n4 | v2 bi ep1 | v2 bi ep2 |
+|---|---|---|---|
+| [arc_easy] | 93.0 | 37.0 | 67.0 |
+| [boolq] | 80.3 | 87.4 | 88.4 |
+
+최종(둘 다 최적 T):
+
+| 지표 | v0 n_perm=4 | v2 bi | 판정 |
+|---|---|---|---|
+| [boolq] 정확도 | 80.3 | 88.4 | v2 +8.1%p |
+| [boolq] NLL | 0.428 | 0.295 | v2 |
+| [boolq] ECE | 0.030 | 0.025 | 비김 |
+| [arc_easy] 정확도 | 93.0 | 67.0 | v0 +26%p |
+| [arc_easy] NLL | 0.207 | 0.860 | v0 |
+| [arc_easy] ECE | 0.041 | 0.080 | v0 |
+| T | 0.87 | 1.51 | |
+
+발견:
+- BoolQ: 학습된 헤드가 로그확률 읽기를 이김. 논지의 첫 실제 데이터 증거.
+- ARC 붕괴: bi-encoder 설계 경계. 선택지("the moon", "6")를 질문과 독립 인코딩하면 상호작용 정보가 없음. 검색 분야의 bi vs cross-encoder 결과와 같음.
+- 규칙: 닫힌 선택지 집합(큐, 우선순위, 예/아니오) → bi(캐시). 내용 있는 선택지(객관식, 후보 검증) → cross.
+- T=1.51: ARC 과신이 전역 T를 끌어올려 BoolQ를 과하게 눌렀을 가능성. source별 temperature 후보.
+
+### E6. v2.1 cross-isolated + LM prior (4080)
+질문+선택지 한 시퀀스. 접두부에 선택지 나열 없음(고립 검증). 선택지 토큰 평균 로그확률을 학습 가능한 스케일로 더하고 헤드 마지막 층 0-init.
+
+- 0스텝(LM prior만): ARC 68.1, BoolQ 66.4. 버그 아님(찍기 25% 아님). 로컬 135M 스모크에서도 동일 결론.
+- 왜 93이 아닌가: v0는 선택지 4개를 보고 고르고(비교 선택), 고립 검증은 후보를 혼자 보고 우도로 잼. 짧은 선택지의 언어적 사전확률이 판단을 오염. **3B에서 고립 검증은 비교 선택보다 25%p 어렵다.**
+- 학습 손실 0.52에서 시작(bi는 0.77). LM prior 출발점 효과.
+- epoch 1(보정 전): ARC 94.0 / NLL 0.209, BoolQ 87.8 / 0.329, 전체 NLL 0.302, ECE 0.050.
+- **68 → 94: 고립 검증이 학습으로 비교 선택 수준까지 감.** 선택지 나열 없음, 라벨 없음, 26개 제한 없음, 위치 편향 구조적으로 없음. 검증기 방향의 첫 증거. ARC-Challenge에서 격차가 남는지가 다음 질문.
+
+### E7. v2.2 cross-label + LM prior + options-in-prefix (4090)
+접두부에 선택지 나열(비교 문맥), continuation은 라벨 글자(" B") → 0스텝 = 정확히 v0. 학습 중 나열 순서 셔플.
+
+실행 1 (lr 2e-4, 발산): 손실 50스텝 0.52 → 100스텝 0.65 → 150스텝 1.2+. 워밍업 종료(73스텝) 직후.
+- 원인: LM prior는 같은 백본에서 나오므로 LoRA와 함께 움직임. 헤드 0-init이라 초반 그래디언트가 prior 경로로만 흐름 = "정답 글자를 내도록 LM 파인튜닝". 2e-4는 출발점(≈v0)을 흔듦. bi용 LR을 잔차 학습에 그대로 쓴 실수.
+- 로그 보관: `real_label_lr2e-4_diverged.log`.
+
+실행 2 (03:48 재시작, lr 5e-5, 셔플 켜짐, 단일 LR):
+
+| step | 50 | 100 | 150 | 200 |
+|---|---|---|---|---|
+| lr 2e-4 | 0.52 | 0.65 | 1.2+ | — |
+| lr 5e-5 | 0.44 | 0.46 | 0.42 | 0.45 |
+
+epoch 1(보정 전):
+
+| | v0 n_perm=4 | cross-isolated (4080) | cross-label (4090) |
+|---|---|---|---|
+| [arc_easy] 정확도 | 93.0 | 94.0 | 93.7 |
+| [arc_easy] NLL | 0.207 | 0.209 | 0.193 |
+| [boolq] 정확도 | 80.3 | 87.8 | 88.6 |
+| [boolq] NLL | 0.428 | 0.329 | 0.295 |
+| 전체 NLL | 0.379 | 0.302 | 0.273 |
+| 전체 ECE | 0.026 | 0.050 | 0.029 |
+
+읽기:
+- ARC val 570개 → 정확도 표준오차 약 1.1%p. 93.0 / 93.7 / 94.0은 통계적으로 동일. **ARC: 안 잃음.**
+- BoolQ 2,000개 → 오차 약 0.7%p. 80.3 vs 87.8/88.6은 명백. **BoolQ: +8%p 얻음.**
+- 판정은 NLL: label 모드가 두 과제 모두 최고(0.273 vs 0.379). 보정 전 ECE 0.029 ≈ v0 0.026. "v0 위의 잔차" 설계가 의도대로 동작.
+- **논지 성립**: 같은 3B 위 1% 부품 학습으로 백본이 아는 것은 지키고, 모르던 것은 얻고, 확률의 질은 올라감.
+
+### E6/E7 최종 (epoch 1 체크포인트, 보정 후). 네 행 표.
+
+| | v0 (n_perm 4) | v2 bi | v2.1 isolated (4080) | v2.2 label (4090) |
+|---|---|---|---|---|
+| [arc_easy] 정확도 | 93.0 | 67.0 | **94.0** | 93.7 |
+| [arc_easy] NLL | 0.207 | 0.860 | **0.184** | **0.184** |
+| [arc_easy] ECE | 0.041 | 0.080 | **0.013** | 0.024 |
+| [boolq] 정확도 | 80.3 | 88.4 | 87.8 | **88.6** |
+| [boolq] NLL | 0.428 | 0.295 | 0.296 | **0.293** |
+| [boolq] ECE | 0.030 | 0.025 | **0.019** | 0.023 |
+| 전체 NLL | 0.379 | 0.420 | 0.271 | **0.269** |
+| 전체 ECE | 0.026 | 0.030 | **0.014** | 0.019 |
+| T | 0.87 | 1.51 | 1.55 | 1.16 |
+
+- isolated 와 label 은 동점 (NLL 0.271 vs 0.269, 정확도 차이 전부 오차 안). 비교 문맥은 학습 후 값이 없다.
+- 둘 다 v0 를 모든 열에서 이기거나 비김. ARC 열: 93 → 67 → 94 → 94.
+- epoch 2 는 두 실행 모두 정확도 +0.6~1.3%p(오차 안), NLL 악화(0.302→0.373 / 0.273→0.308) = 과신. 보정 전 NLL 기준이라 epoch 1 유지.
+  epoch 2 체크포인트는 저장 안 돼 보정 후 비교 불가 → 선택 기준 변경 (아래 코드 변경 기록).
+- 4080 epoch 2 가 epoch 1 보다 2~3배 느렸음. 스로틀링 아님(60도, 2775MHz, 237/320W). 원인 미상.
+
+### E8. 0스텝 분해: 비교 문맥의 값 vs 라벨의 값 (4090, LM prior만, 학습 없음)
+
+| 0스텝 | 후보 목록 | 답 형식 | ARC | BoolQ |
+|---|---|---|---|---|
+| isolated | 없음 | 원문 | 68.1 | 66.4 |
+| text+options | 있음 | 원문 | 75.4 | 73.9 |
+| label | 있음 | 글자 | 91.8 | 78.9 |
+
+- 후보 목록만으로 ARC +7.3, BoolQ +7.5. 글자 답으로 바꾸면 추가로 ARC +16.4, BoolQ +5.0.
+- 학습 안 한 Qwen2.5-3B 에서 v0 방식이 강한 이유의 2/3 는 "글자로 답하기"(시험 형식 특화). 학습 후엔 24%p 격차가 사라짐(E6/E7).
+
+### E9. 위치 불변성 (eval --permute-seed, 보정 후)
+
+| | 고정 | seed 1 | seed 2 |
+|---|---|---|---|
+| label ARC | 93.7 | 94.9 | 94.6 |
+| label BoolQ | 88.6 | 88.3 | 88.3 |
+| label NLL | 0.269 | 0.264 | 0.268 |
+| bi ARC / BoolQ / NLL | 66.8 / 88.3 / 0.420 | 동일 | 동일 |
+
+- label 모드: 순서를 바꿔도 ARC 1.2%p 범위(오차 1.1%p) → 셔플 학습이 위치 불변성을 심음. v0 가 n_perm 1→4 로 벌던 1.4%p 편향이 학습으로 사라짐.
+- bi: 소수점까지 동일(구조적으로 순서 없음) → 순열 평가 기계 검증.
+- isolated 는 순서 자체가 없어 측정 불요.
+
+### E10. 일반성 시험 (4090, 진행 중, 05:24 시작)
+질문: 학습한 데이터셋 밖에서도 v0 를 이기는가 = "과제를 외웠나, 판단하는 법을 배웠나".
+
+학습: arc_easy 2,251 + boolq 9,427 + **banking77 2,500** (77개 의도 분류, CC BY 4.0; HF 리포는 스크립트 기반이라
+GitHub CSV 직접 로드). isolated cross + LM prior, lr 5e-5, 1 epoch, bs1 x accum16 (banking77 은 예제당 시퀀스 77개).
+- 처음엔 banking77 10,003 전체로 시작했으나 (a) step당 8.5초 → 3.3시간, (b) 학습셋 21.7k 의 절반이 한 과제라
+  "과제 하나 추가"가 아니라 "학습셋을 banking77 로 교체"가 됨 → 2,500 으로 줄여 재시작 (2.2k / 9.4k / 2.5k 균형).
+  **[사후 발견 2026-09-19 21:00] 이때의 banking77 2,500 은 라벨별로 정렬된 CSV 의 앞 2,500 행이라 77개 의도 중 ~21개만 포함 (E14 준비 중 2,000 표본에서 17/77 로 확인). E10 의 banking77 열은 '77-way' 가 아니라 '~21-way, 77개 나열' 로 읽어야 함. convert.py 는 seed 무작위 표본으로 고침.**
+  10k 실행의 100 step 로그는 `gen_full10k_aborted.log`. 2,500 으로는 banking77 자체 천장(의도당 32개, few-shot 영역)은
+  못 보며, "77개 닫힌 라벨에서 isolated 가 되는가"만 답한다 (85 넘으면 충분).
+- 0스텝(학습셋 val): arc 67.9 / boolq 66.2 / **banking77 17.2** (찍기 1.3%; 의도 이름 텍스트 우도만으로 13배).
+held-out (학습에 안 씀, T 는 학습셋 val 값 그대로, 재조정 없음):
+
+| 데이터셋 | HF id | 형식 | 라이선스 | 역할 |
+|---|---|---|---|---|
+| OpenBookQA | allenai/openbookqa (main) | 4지선다 과학 | Apache 2.0 | ARC 근접 대조군 |
+| CommonsenseQA | tau/commonsense_qa | 5지선다 상식 | MIT | 도메인·선택지 수 다른 시험 |
+| HellaSwag | Rowan/hellaswag | 4지선다, 긴 문장 선택지 | MIT | 형식이 완전히 다른 가장 어려운 전이 |
+
+피함: PIQA (AFL 3.0), SciQ (CC BY-NC 3.0) — 공개 가중치 학습 데이터로 부적합.
+판정: OBQA 만 v0 근처 → 근접 도메인 전이. CSQA·HellaSwag 까지 v0 근처 이상 → 판단하는 법을 배움.
+부수 측정: init (step 0) 의 [banking77] — LM prior 가 의도 이름 텍스트만으로 77지선다를 얼마나 맞추나 (찍기 1.3%).
+
+**E10-a. 2과제 모델(real_cross, arc+boolq) held-out — 4080S, 06:00 완료.** 정확도(%), 0스텝 = 학습 안 한 isolated prior.
+
+| held-out | n | v0 n4 | isolated 0스텝 | 2과제 학습 후 | 전이 (학습후−0스텝) | v0 대비 |
+|---|---|---|---|---|---|---|
+| OpenBookQA | 500 | 76.2 | 37.8 | 68.4 | +30.6 | −7.8 (오차 1.9) |
+| CommonsenseQA | 1,221 | 77.7 | 46.8 | 76.2 | +29.4 | −1.5 (오차 안) |
+| HellaSwag | 2,000 | 65.8 | 50.3 | 65.5 | +15.2 | −0.3 (동점) |
+
+NLL: 본 판정은 체크포인트 T(1.55) 그대로 — OBQA 1.04 / CSQA 0.76 / HS 0.96 (v0 는 각 held-out 에서 T 맞춤: 0.62 / 0.62 / 0.86).
+진단용으로 held-out 에서 T 를 다시 맞추면 0.84 / 0.63 / 0.89, refit T = 3.3 / 2.9 / 2.5 → held-out 에서 과신이 크다.
+CSQA·HS 의 NLL 격차는 대부분 보정 문제, OBQA 는 순위 자체도 뒤짐.
+
+읽기:
+- 안 본 3개 중 2개(CSQA, HellaSwag)에서 v0 와 동급. 도메인(상식)도 형식(긴 문장 선택지)도 학습셋과 다른데 0스텝에서 +15~29%p 올라 v0 에 붙음 → "판단하는 법"이 옮겨간 증거.
+- OBQA 는 −7.8. 근접 도메인인데 오히려 가장 나쁨. 0스텝 37.8 로 셋 중 prior 가 가장 약했고("...because" 로 끝나는 문장 완성형 질문 + 짧은 선택지), 학습이 +30.6 을 메웠지만 부족.
+- 0스텝 HellaSwag 50.3: "우도 채점이 유리할 것"이라는 예상과 달리 v0(65.8) 보다 낮음. 우리 템플릿("Question: Which ending...\n\nAnswer: <ending>")의 평균 로그확률은 lm-eval-harness 의 acc_norm 과 다른 채점.
+- 판정(중간): "과제를 외웠다"는 기각. "판단하는 법을 배웠다"에 가깝되 OBQA 가 남은 숙제. 3과제(banking77 추가) 열은 4090 에서 진행 중.
+
+**E10-b. 2과제 label 모드(real_label) held-out — 4090, 06:30.** OBQA 79.8 (v0 +3.6, NLL 0.556 < v0 0.624), CSQA 78.8 (+1.1, NLL 0.630 ≈ 0.617),
+HellaSwag 63.6 (−2.2, NLL 0.987 > 0.860). 셋 중 둘에서 v0 위. "프롬프팅을 하한으로 보장"은 대략 성립하되 HellaSwag 에서 2%p 아래
+(v0 기준선이 n_perm 4 순열 평균인데 label 의 출발점은 단일 순서 = v0 n_perm 1 이라 그 차이가 남은 것으로 해석).
+
+**E10-c. 3과제 모델(gen2: arc + boolq + banking77 2,500) — 4090, 09:12 완료.** isolated, lr 5e-5, 1 epoch, bs1 x accum16, 학습 2h(banking77 예제당 시퀀스 77개).
+학습셋 val(보정 T=1.12): arc 93.0 / boolq 88.3 / **banking77 85.5** (0스텝 17.2 → 85.5, 의도당 32개로 "77개 닫힌 라벨에서 isolated 가 되는가" 통과). 전체 ECE 0.010.
+
+| held-out | v0 n4 | 0스텝 | 2과제 isolated | **3과제 isolated** | 2과제 label |
+|---|---|---|---|---|---|
+| OpenBookQA | 76.2 | 37.8 | 68.4 | 63.4 (ECE 0.19) | 79.8 |
+| CommonsenseQA | 77.7 | 46.8 | 76.2 | 75.0 (ECE 0.14) | 78.8 |
+| HellaSwag | 65.8 | 50.3 | 65.5 | 63.7 (ECE 0.03) | 63.6 |
+
+- 과제를 하나(닫힌 라벨 분류) 더해도 안 본 객관식 전이는 늘지 않았고 셋 다 2과제와 같거나 살짝 아래. "과제 수 스케일링" 곡선의 두 번째 점은 평평하거나 하강.
+- **교란**: 2과제 isolated 는 lr 2e-4 · 2 epoch(베스트 epoch 1), 3과제는 lr 5e-5 · 1 epoch. 학습셋 안 성능은 같은데(arc 93 / boolq 88) 전이가 다르므로,
+  과제 추가 효과와 학습률·epoch 차이가 분리되지 않음. 결론 내리려면 같은 lr/epoch 로 2과제 vs 3과제 재대조 필요 (E10-d 후보).
+- 알려진 결함: train.py 의 보정 단계(베스트 재로드)에서 이전 모델이 완전히 해제되지 않아 GPU 메모리 12GB → 22GB, 보정 평가가 3배 느려짐(30분).
+  `del model` 뒤에도 peft 래퍼/로컬 참조가 남는 것으로 보임. 다음 버전에서 재로드를 별도 프로세스로 분리하거나 `gc.collect()` + 참조 정리.
+
+### E11. Jev 독립 측정 (Vercel AI Gateway `typesafe-ai/jev`, scripts/jev_eval.mjs → jevlocal.eval_dump)
+같은 held-out 세 개를 Jev 에 던져 확률 분포·confidence 를 받음. 3,721건, 입력 145만 토큰, 약 $0.06. 무료 티어는 레이트 리밋(500건 중 7건 통과) → 크레딧 충전 후 실패 0.
+동시성 32 는 CSQA 에서 재시도 지옥 → 8 로 안정.
+
+| held-out | v0 3B | 2과제 isolated | 2과제 label | **Jev** | Jev NLL | Jev ECE | Jev refit T |
+|---|---|---|---|---|---|---|---|
+| OpenBookQA | 76.2 | 68.4 | 79.8 | **94.2** | 0.172 | 0.024 | 0.96 |
+| CommonsenseQA | 77.7 | 76.2 | 78.8 | **88.1** | 0.395 | 0.032 | 1.35 |
+| HellaSwag | 65.8 | 65.5 | 63.6 | **86.1** | 0.420 | 0.029 | 1.00 |
+
+읽기:
+- 정확도: 3B 계열이 낼 수 없는 수준 (OBQA 94, HellaSwag 86 은 프론티어급). 백본이 훨씬 크거나 공개 벤치마크가 학습에 들어갔거나 둘 다.
+  → 규모 통제: Qwen2.5-7B base v0 를 같은 held-out 에 (E12, 큐). 오염은 확인 불가.
+- 캘리브레이션: refit T 0.96 / 1.35 / 1.00, ECE 0.02~0.03. 우리 모델이 안 본 과제에서 T 2.5~3.3 이었던 것과 대비. 단, 이 과제들이 Jev 에겐
+  "본 과제"일 수 있어 in-domain 캘리브레이션일 가능성 → 오염 불가능한 합성 티켓 데이터로 재측정 (E13, 진행 중).
+- 확률은 0.01 단위 양자화, 정확히 0 이 다수 (OBQA 2,000 값 중 1,051). 정답에 0 을 준 경우 1건 (pred A 1.00, conf 0.99) → NLL 에 13.8 기여;
+  그 1건 제외 시 NLL 0.144. "거짓 확신" 각주.
+- 별도 confidence 필드: 정답률 예측 ECE 0.035 / 0.035 / 0.078. HellaSwag 에서 max-prob 보다 나쁨.
+- ECE 노이즈 바닥(같은 예측 분포에서 라벨 재표집 200회, 완벽 캘리브레이션 모델의 기대 ECE): OBQA 0.024 → 측정 0.024 = **1.03×** (구분 불가),
+  CSQA 0.019 → 1.65×, HellaSwag 0.018 → 1.65×. 합성 900: 바닥 0.024 → 측정 0.107 = **4.4×**.
+- 게이트웨이 원응답에 `rounding: {probabilityDecimals: 2, scoreDecimals: 2}` 필드가 있음 → 0.01 양자화의 출처. 모델 버전은 노출 안 됨(canonical slug `typesafe-ai/jev`; 문서의 `jev-latest` 는 404).
+- 공개: https://github.com/scienthoon/jev-ood-calibration (원응답 4,621건, 생성기, eval_dump + 노이즈 바닥, README). 2026-09-19 푸시.
+- 외부 등록 (2026-09-19, 모두 선생님 계정): awesome-jev PR #30 (yibie), awesome-jev-typesafe-origin PR #1 (yodablocks),
+  HF Space multimodalart/jev-reproductions-tracker discussions/5, jev-exploration issue #10 (SamuelSacco). 이슈에는 반례(정답 P=0.00, 오답 1.00, conf 0.99)와
+  방법 질문(직접 API 응답에도 `rounding` 메타데이터·0.01 양자화가 있는가)을 포함. 답이 오면 README 각주에 조건을 붙일 것.
+
+### E12. 규모 통제: Qwen2.5-7B base v0 (n_perm 4, 각 held-out 에서 T 맞춤) — 4090, 09:37 완료
+
+| held-out | v0 3B | **v0 7B** | Jev | 3B→7B | 7B→Jev |
+|---|---|---|---|---|---|
+| OpenBookQA | 76.2 | 83.2 (ECE 0.041, T 0.72) | 94.2 | +7.0 | +11.0 |
+| CommonsenseQA | 77.7 | 81.2 (ECE 0.028, T 0.67) | 88.1 | +3.5 | +6.9 |
+| HellaSwag | 65.8 | 77.0 (ECE 0.022, T 0.65) | 86.1 | +11.2 | +9.1 |
+
+- 백본을 두 배(3B→7B)로 키우면 3.5~11%p 오르지만 Jev 까지는 여전히 7~11%p 남는다. Jev 의 정확도는 "큰 백본에 프롬프팅급" 으로는
+  설명되지 않고, 훨씬 더 큰 백본이거나 벤치마크 노출이거나 둘 다. 어느 쪽인지는 이 실험으로 못 가른다(오염은 외부에서 확인 불가).
+- 7B 프롬프팅의 T 는 0.65~0.72 (과소확신) 로 3B(0.87) 보다 1에서 멀다. 보정 후 ECE 는 0.02~0.04 로 3B 와 같은 수준.
+- 우리 Luce 3B(2과제 label 79.8 / 78.8 / 63.6) 는 OBQA·CSQA 에서 7B 프롬프팅에 못 미친다(83.2 / 81.2). "1% 학습이 백본 두 배를 대신하는가" 에는
+  in-domain(BoolQ +8%p)에서만 그렇다고 답할 수 있고, 안 본 과제에서는 백본 크기가 더 값어치 있다.
+
+### E13. Jev, 오염 불가능한 과제: 합성 티켓 val 900 (E1 데이터, seed 0 재생성, md5 2451fe7b)
+Jev 가 존재를 알 수 없는 규칙 기반 데이터. queue/angry 는 의미 기반이라 맞힐 수 있고, priority 는 "템플릿 긴급도 + 화남 + 티어" 임의 규칙이라 못 맞히는 게 정상.
+핵심 질문: 못 맞히는 과제에서 확률이 낮은가 (모르는 걸 모른다고 하는가).
+
+| 타입 | n | Jev 정확도 | NLL | ECE | refit T | 비고 |
+|---|---|---|---|---|---|---|
+| choice (queue, 4지) | 300 | 89.0 | 0.697 | 0.082 | **3.29** | 맞히지만 틀린 데 1.0 을 줌 |
+| noul (angry) | 300 | 91.7 | 0.275 | 0.079 | 0.66 | 과소확신 |
+| score (priority, 4단계) | 300 | 44.7 | 1.331 | **0.325** | **3.40** | 못 맞히면서 max-prob 평균 0.74 |
+| 전체 | 900 | 75.1 | 0.768 | 0.107 | **2.74** | |
+
+- **안 본 과제에서 Jev 의 확률은 정직하지 않다.** priority 정확도 44.7% (찍기 25, 이웃 1단계 이내 98%) 인데 확률은 평균 0.74 로 확신.
+  refit T 2.7~3.4 는 우리 모델이 held-out 에서 보인 2.5~3.3 과 같은 크기. E11 의 T≈1 은 in-domain(공개 벤치마크 노출) 캘리브레이션으로 읽는 것이 정합.
+- confidence 필드도 여기선 정답률을 예측 못 함 (ECE-if-probability 0.18; E11 에선 0.035).
+- 정확도 자체는 v0 3B(choice 93.0 / noul 64.3 / score 34.3)보다 noul·score 에서 훨씬 높음 → 의미 판단은 강한 백본 덕. 우리 학습 모델(95/95/97)은 규칙을 배운 것이라 비교 대상 아님.
+- 결론(캘리브레이션 축): "RLCD 가 OOD 캘리브레이션을 해결했다"는 이 실험에서 기각. Jev 도 과제별 보정(고객 데이터 200개로 T)이 필요하며, 그 점에서 우리와 같은 처방.
+
+### E14. 백본 교체: Ouro-2.6B (ByteDance, 루프형 LM, 48층 × 반복 4회) — 4090, /venv/ouro (transformers 4.54.1)
+목적: 같은 레시피(라벨 읽기 → label 모드 학습)를 파라미터 2.6B·유효 깊이 4배인 루프형 백본에 얹었을 때 출발점과 학습 결과가 어떻게 되는가. Qwen2.5-3B 와 같은 val 2,570(ARC 570 + BoolQ 2,000).
+
+**관문 1 (학습 없음, 24분).**
+
+| 설정 | ARC | BoolQ | 전체 NLL(보정 후) | 맞춘 T |
+|---|---|---|---|---|
+| v0 라벨 읽기, ut_steps=4, n_perm 4 | **95.1** | **87.4** | 0.292 | 0.50 |
+| v0, ut_steps=2 | 77.5 | 77.3 | 0.520 | 0.39 |
+| v0, ut_steps=1 | 57.5 | 37.8 | 0.834 | 1.83 |
+| isolated 0스텝(LM prior 우도), ut_steps=4 | 65.6 | 83.1 | 0.661 | 0.60 |
+| (비교) Qwen2.5-3B v0 n_perm 4 (E4) | 93.0 | 80.3 | 0.379 | 0.87 |
+| (비교) Qwen2.5-3B isolated 0스텝 (E8) | 68.1 | 66.4 | — | — |
+
+- 반복 4회가 필수: 2회로 줄이면 ARC −18pp, 1회는 무작위 근처. 추론 비용은 4회 기준으로 생각해야 함(2.6B × 4 ≈ 10B 급 깊이).
+- 학습 없이 Qwen 보다 ARC +2.1, BoolQ +7.1. BoolQ 87.4 는 Qwen 이 label 학습 후 도달한 88 에 근접. T=0.50 은 과소확신(선택지 간 로짓 차가 작음) — 학습이 이 부분을 채울 여지.
+- isolated 0스텝도 BoolQ 는 83.1 로 Qwen(66.4) 보다 훨씬 높음. 관문 판정: 라벨 읽기 ≥ 93.0 → **label 모드**.
+- 호환 문제 3건은 "코드 변경 결정 기록" 참고 (use_cache, 튜플 출력, 별도 venv). 공유 prefix KV 캐시는 이 백본에서 불가 → per-option 폴백(평가만 느려짐, 학습 비용은 동일).
+
+**관문 2 (진행 중, 20:08 시작).** label 모드, lr 5e-5, ut_steps 4, 1 epoch, batch 4 × accum 4, grad ckpt. 과제 누적 mix1..mix6 (과제당 2,000: arc_easy → +boolq → +banking77 → +klue_ynat → +nsmc → +synth), 각 mix 마다 in-domain val(과제당 500) + held-out OBQA/CSQA/HellaSwag(학습셋 T 그대로). banking77 은 `--label-overflow isolated`(기본).
+- 21:10 결정(사용자): 누적 6개는 실측 17 h 로 너무 길어 **mix2 까지만** 돌리고 멈춤. banking77 비용(예제당 77 시퀀스)을 줄이는 학습용 음성 표본추출 `--max-train-options K`(정답 + 무작위 음성 K−1, 평가는 전체) 를 추가해 E15 사다리부터 적용(K=16). mix3~6 은 사다리 뒤에 결정.
+- 21:00 데이터 수정: banking77 2,000/500 이 정렬된 CSV 의 머리(17/13 의도)였음을 발견, seed 0 무작위 표본(77/77 의도, 라벨당 train 7~50 / val 1~12)으로 교체하고 mix3~6 재빌드. mix1·mix2 는 영향 없음(arc/boolq 는 원래 무작위 순서). 옛 파일은 `data/tasks/banking77_head17/`.
+
+### E15. 백본 사다리 × 라벨 효율 (계획, 관문 2 종료 후 4090 에 자동 시작)
+질문: "당신 과제엔 얼마나 작은 모델이면 되나" 와 "라벨이 몇 개면 되나" 를 한 표로. `backbone: auto` 의 문턱(0~999 → 4B, 1천~4,999 → 1.7B, 5천+ 닫힌 집합 → 0.6B)은 추정치이므로 이 곡선으로 교정.
+- 과제 2개: 합성 티켓(data/tasks/synth, 1,992/498, 라벨 모드) · banking77(2,000/500, 77 의도, label 모드 + overflow isolated).
+- 백본 3개: Qwen3-0.6B-Base · Qwen3-1.7B-Base · Qwen3-4B-Base (transformers 5.17, /venv/main).
+- 라벨 수 5단계: 0(`--eval-init`, 학습 없음 = 프롬프팅 하한) · 250 · 500 · 1,000 · 2,000 — seed 0 셔플 뒤 앞 n 개(중첩 부분집합). epoch 2 (2,000 은 1).
+- 측정: 과제 val 정확도, 보정 후 NLL, ECE, 맞춘 T. 30 실행(2×3×5), 예상 3~4 시간.
+- 판정: 0.6B 직접 학습이 4B 와 붙으면 증류 불필요; 벌어지면 증류(4B → 0.6B)가 격차를 메우는지 다음 실험. ModernBERT-large(인코더, 395M) 점은 인코더 경로 검증 후 추가.
+
+**결과 (부분, 23:40 4090 반납으로 중단 — 합성 티켓 14/15 실행 완료, banking77 15 실행은 못 함).** val 498, 정확도 % (보정 후 NLL), 250~1,000 은 2 epoch, 2,000 은 1 epoch, K=16 음성 표본.
+
+| 백본 | 라벨 0 (프롬프팅) | 250 | 500 | 1,000 | 2,000 (1 ep) |
+|---|---|---|---|---|---|
+| Qwen3-0.6B-Base | 59.0 (0.828) | 67.9 (0.711) | 77.5 (0.621) | 82.1 (0.510) | 79.5 (0.542) |
+| Qwen3-1.7B-Base | 53.6 (0.835) | 71.9 (0.673) | 76.3 (0.608) | 84.3 (0.483) | 84.9 (0.473) |
+| Qwen3-4B-Base | 59.0 (0.816) | 77.7 (0.591) | 83.9 (0.496) | **88.8 (0.377)** | (중단) |
+
+- **사다리 가설 기각(이 과제, ≤1k 라벨 범위):** 모든 라벨 수에서 4B > 1.7B > 0.6B. 라벨 1,000 에서 4B 88.8 / 1.7B 84.3 / 0.6B 82.1 — 작은 백본은 "공짜"가 아니라 4~7 점을 내는 비용 선택. "1천~5천이면 1.7B, 5천+ 이면 0.6B" 문턱은 이 데이터로는 근거 없음 → `backbone: auto` 를 4B 고정으로 바꾸고 작은 백본은 명시 선택으로(코드 변경 기록 참고).
+- 라벨 효율: 세 크기 모두 250 → 1,000 에서 아직 가파르게 오름(4B +11 점). 1,000 에서 평평해지지 않았으니 "몇 개면 되나" 의 답은 이 과제에선 1,000 이상.
+- 0.6B 의 2,000 (1 epoch, 79.5) < 1,000 (2 epoch, 82.1): 업데이트 수가 같을 때 라벨을 늘려도 못 이김 → 작은 백본은 epoch 를 더 돌려야 함(레시피 기본 epoch 2 유지가 맞음).
+- 프롬프팅 출발점(라벨 0)은 크기와 무관하게 53~59 로 낮음 → 이 과제(규칙 기반 티켓)는 "데이터 있는 과제" 이고 프롬프팅 하한이 도움이 안 되는 예. 학습 후 ECE 0.04~0.09, T 1.1~1.6(학습 후 과확신, val 로 보정).
+- banking77 절반(77-way, 백본 크기 민감도가 다를 수 있음) 은 다음 GPU 대여 때 `run_ladder.sh` 에 `TASKS=banking77` 로 재개(스크립트는 완료 마커로 건너뜀).
+
+### E16. TypeSafe 공개 eval (evals.typesafe.ai) 에 Ouro mix2 올리기 — 4090, 21:50 시작
+정확도 앵커. Jev 86.9 / system-one-open(Gemma 4 E2B) 76.7 / Qwen-7B 프롬프팅(jev-on-a-laptop) 73.8 이 한 줄에 놓이는 유일한 공용 벤치마크.
+- 시험지: system-one-open(MIT) 의 `typesafe_eval.py` 로직으로 evals.typesafe.ai 의 4개 워크플로 viewer 데이터에서 복원 → **20 케이스 / 372 기준 쌍 / strict common subset 343** (README 숫자와 일치). `scripts/typesafe_bench.py rebuild|convert|score`. 원본 js 는 `data/typesafe/raw/`, 복원본 `data/typesafe/typesafe_full.json`, Luce 형식 `data/typesafe/val.jsonl`.
+- 구성: noul 236 / choice 109 / score 27. state 는 Ouro 토크나이저로 391~12,051 토큰(security 1.9~3k, agent_trace 3.5~12k, invoice 6~11k, customer_service 0.4~1.2k). 기준 답은 프론티어 모델 평균(consensus), 사람 라벨 아님.
+- 채점: strict common subset = opus·sol·typesafe(Jev) 셋 다 답한 쌍만, 같은 쌍에서 네 열 비교(system-one-open evaluate.py 와 같은 정의). 추가로 per-type / per-question 최빈 답 기준선, 우리 ECE·NLL(공개 벤치마크엔 없는 축).
+- 실행: `luce.eval --checkpoint checkpoints/ouro_mix2 --max-query-len 12288 --batch-size 1 --dump` (학습 때 512 였던 좌측 절단을 평가에서 풀어 줌; Ouro 문맥 65k). T 는 체크포인트 값(1.32) 그대로, OOD.
+- 주의: 372 쌍이면 ±5%p 오차. mix2 는 ARC+BoolQ 만 배운 상태라 이 과제들(보안 사고, 에이전트 트레이스, 인보이스, 고객 응대)은 전부 학습에 없던 것 = held-out 과 같은 성격.
+- 결과 (22:52 완료, 48분; 사다리와 GPU 공유 + Ouro per-option 경로라 느림):
+
+| strict common subset (343 쌍) | 정확도 |
+|---|---|
+| **Ouro-2.6B mix2 (ARC+BoolQ 4,000 만 학습, 이 과제들은 전부 미학습)** | **76.7%** (ECE 0.078, NLL 0.653) |
+| system-one-open, Gemma 4 E2B (70 과제 + 합성 59k 학습) | 76.7% |
+| Jev (typesafe) | 86.6% (답한 350 쌍 기준 86.9) |
+| Opus / Sol (프론티어, 기준 답의 재료) | 89.5 / 90.4 |
+| Qwen-7B 프롬프팅 (jev-on-a-laptop, 같은 시험) | 73.8 |
+| 기준선: 타입별 최빈 답 / 질문별 최빈 답 | 58.9 / 81.0 |
+
+- 372 쌍 전체 76.6%. 워크플로별: invoice 82.6 (184) · customer_service 78.3 (92) · agent_trace 70.8 (48) · security 56.2 (48). 타입별: noul 80.9 (236) · choice 76.1 (109) · **score 40.7 (27)**.
+- 읽기: 벤치마크 과제를 하나도 안 배운 2.6B 가, 70 과제를 배운 E2B 재현과 같은 점(76.7). Jev 와는 10 점 차(±5 오차 밖). 약한 곳은 score(수준 척도, 27 쌍) 와 security(48 쌍, 긴 규칙 문서 + noul 37 개). 372 쌍이라 워크플로별 숫자는 ±7~14 점 오차.
+- 학습 전 Ouro(프롬프팅, 같은 템플릿 글자 읽기, T 미조정): common subset **63.3%** (ECE 0.057), 372 쌍 62.6. 워크플로별 security 54.2 / agent_trace 52.1 / invoice 66.3 / customer 65.2. → ARC+BoolQ 4,000 개 학습이 이 벤치마크(전부 미학습 과제)에 **+13.4 점** 을 얹음. Qwen-7B 프롬프팅(73.8, 다른 템플릿) 보다 낮은 출발점에서 시작해 학습 후 넘어섬.
+- 공개용 패키지 `release/ouro-2.6b-decision-lora/` (어댑터 121MB + head.pt + decision_config.json + calibration.json + inference.py 250줄 + 모델 카드 + requirements). inference.py 는 Luce 를 import 하지 않음. 검증: 합성 val 30건에서 Luce 평가기(batch 1)와 확률 **최대 차이 0.00000**, argmax 30/30 (batch 4 의 Luce 와는 bf16 패딩 잡음으로 최대 0.033). **HF 업로드 완료 (23:30, 사용자 지시): https://huggingface.co/noscienthoon/ouro-2.6b-decision-lora** (Apache-2.0, 9 파일, 커밋 fcea1b1). score 타입은 훈련 데이터에 score 가 없었으니(ARC=choice, BoolQ=noul) mix6(합성 티켓의 score 포함) 이 오르는지 볼 것.
+
+### E17. 네 과제 × Qwen3-4B-Base, 4×4070S(12GB) 동시 실행 (2026-09-20, 준비)
+데이터는 별도 세션이 수집·검증한 `data/four_tasks/` (README 참고; Luce 소스 무수정, 분할 train/val/calibration/test [+ maze ood], 해시·겹침 검증 통과).
+| 과제 | train 행 | 질문 | 비고 |
+|---|---|---|---|
+| github_issues (kubernetes 2023–2025) | 2,817 | kind Choice 4 / priority Score 4 | 실제 관리자 라벨. 본문 길어 max_query_len 1,024, bs 1×16 |
+| phishing (PhishNChips v5.2, jev-phishing-bench 와 같은 2,000) | 1,000 | Noul | Jev ECE 0.154 와 같은 셋(test 500) |
+| maze (NanoJev-Data 맵, 3수 확장 과제) | 7,884 | safe_move Choice 4 / death Noul / risk Score 4 | 정확 계산된 label_probs (Choice dict, Noul float) → 캘리브레이션 학습 상한 |
+| rule_tickets (LLM 합성: DeepSeek V4.1 Flash, 1,000 state, $0.32) | 3,000 | queue Choice / priority Score / angry Noul | val·cal·test 는 규칙 생성기(label_noise 0) 1,994 관측 = "문장→데이터→모델" 첫 검증 |
+절차(과제당 GPU 1장, `run_task.sh`): `--eval-init`(0스텝) → 2 epoch label 모드 학습(val 로 선택+T) → calibration.jsonl 로 타입별 T 재조정·저장 → test.jsonl 평가+dump (maze 는 ood 도). 기록: requirements.lock, nvidia-smi 5초 로그, 단계별 시각, history/calibration.json, last/. 12GB 라 4B 는 bs 1~4 × accum 으로.
+- 비용 균형(사용자 요청, 4장 동시 과금이라 가장 긴 작업이 비용): 네 과제를 35~45분에 맞춤 — maze 7,884 → 4,500 행(1,500 상황 × 3), github_issues 2,817 → 1,200 행(choice 1,029 / score 171) + max_query_len 1,024 → 768. phishing·rule_tickets 는 전체. 전부 2 epoch(E15: 같은 비용이면 행 줄이고 2 epoch).
+- 12GB 스모크: 4B, qlen 768, bs 1 × accum, grad ckpt → 피크 10.7GB, OOM 없음.
+- 시작 2026-09-20 01:5x UTC (인스턴스 ssh9.vast.ai:27207, 4×4070S). rule_tickets 는 `asciinema rec -i 2` 로 학습 터미널 녹화(`logs/four/rule_tickets_train.cast`).
+- 01:48 예산 조정(크레딧 $1.21, $0.412/h): 미로 14.4 s/step, GitHub 31.9 s/step 로 한도 초과 예상 → 둘을 죽이고 재시작. 미로 1,500 행(500 상황), val 450 / cal 900 행; GitHub 600 행, val 150 / cal 200, test 500 행 상한. 첫 시도 로그는 `*_attempt1.log`.
+- **phishing 완료 (01:42, 18분)**: 0스텝 50.0%(무작위, T→20) → epoch 1 74.0 → epoch 2 **97.2**(val). calibration 재조정 T(noul)=1.72. **test 500: 정확도 97.4, recall 98.8, FP 4.0%, NLL 0.078, ECE 0.010.** jev-phishing-bench(같은 PhishNChips 2,000, Jev 는 0샷 전체 2,000): Jev 직접 판정 62.6%(recall 43.2, FP 18.0, ECE 0.154), Claude Haiku 4.5 81.3, 두 줄 정규식 91.6~91.8, Jev 5개 신호 위 로지스틱 회귀 95.0~95.1(ECE 0.027). 주의: 우리는 같은 분포 1,000건으로 학습한 in-domain 이고 저쪽은 0샷 — "라벨 1,000개 + 4070S 20분이면 Jev 의 자체 벤치마크를 넘는다" 가 정확한 문장. 본문은 합성이고 신호는 URL·발신자에 있어 정규식으로도 91.8 이 나오는 셋.
+- 결과 (나머지): (진행 중)
+
+### 스모크 테스트(로컬, SmolLM2-135M)에서 나온 것
+- v2.1 체크포인트를 v2.2 코드로 로드/평가: 하위 호환 정상.
+- 추론 비결정성: 같은 질문을 배치 구성 다르게 두 번 물으면 확률이 미세하게 다름. 셔플 누수 아님(training=False 확인). 배치별 left padding 길이 차이 → fp16/bf16 수치 잡음. 기준: 차이 1e-2 이하면 잡음.
+- 셔플 검증: train 모드에서 순서를 섞어도 argmax가 원래 키 자리로 복원됨.
+- T=20.0000: 135M이 18개 val에서 정보가 없으면 NLL 최적 T→∞. fit_temperature에 [0.05, 20] 클램프와 경계 경고 추가.
+
+---
+
+### B1. Luce v0.2 빌드 (2026-09-19, 실험 아님)
+`jevlocal` → `luce` 리네임(shim 유지), `luce.yaml` + CLI(init/synth/baseline/train/eval/serve/convert), synth 파이프라인(페르소나·grid·의도·near-miss·dedup·다중 투표), 실제 검증셋 강제([in-synth] 태그), 타입별 temperature, selective-risk 표, review 큐, 모델 카드 5개, torch-free 단위 테스트 11개.
+- 검증: 휠 빌드 → 새 venv 설치 → `luce --help`/init/dry-run 통과. gpt-4o-mini teacher 로 init(예시 30티켓 → seeds 15 / real 15 자동 분리) → synth 60 (41초, 오류 0) → SmolLM2 train(--real) → eval(--real, 타입별 T 저장) → baseline → serve(review 2건) → `--append` 재학습까지 전부 통과.
+- 발견·수정: init 이 씨앗의 subject/body 문장을 grid 값으로 복사 → 생성물이 두 주제로 쏠려 라벨 분포 왜곡(billing 30/general 27/shipping 0). 씨앗 필드 값 복사 감지 guard + 자유 텍스트 값 필터 + 기본 축(sentiment/length) 채움 후 billing 20/shipping 16/technical 17/general 7 로 회복.
+- `luce eval --synth` 가 luce.yaml 의 eval.real 에 밀리던 우선순위 수정 (명시 --synth > 설정 real).
+- 미실행: HF 업로드(사용자 지시로 제외), openjev 열 측정.
+
+## 코드 변경 결정 기록
+- mps 자동 감지 + fp16 (E0 버그).
+- `--score-sigma` 기본 0 (E3).
+- 평가에 source별 분해 추가 (E4 준비).
+- `--scorer cross`, `--lm-prior` (E5 → E6).
+- `--options-in-prefix`, `--continuation label|text`, 학습 중 셔플 (E6 → E7).
+- `--eval-init` (0스텝 측정).
+- `--head-lr`, `--freeze-backbone-steps` (E7 발산 대응; 실행 2는 이 플래그 없이 lr 5e-5만으로 안정).
+- fit_temperature 클램프 (스모크).
+- `--permute-seed` 평가 (E9 실행 완료).
+- 베스트 체크포인트 선택 기준: 보정 전 NLL → **epoch 마다 T 를 맞춘 보정 후 NLL** (`--select-by calibrated_nll|nll|accuracy`). 마지막 epoch 도 `<out>/last/` 에 저장 (`--no-save-last` 로 끔). E6/E7 의 "정확도는 오르고 NLL 은 나빠진 epoch 2" 를 버린 문제의 대응. 4090 의 다음 실행부터 적용.
+- label 모드 학습률: 2e-4 발산 → 5e-5 (E7). LM prior 로 v0 근처에서 출발하는 설정은 잔차 학습이므로 낮은 LR.
+- fit_temperature: LBFGS 가 overflow 로 죽어 경계 있는 격자+황금분할 탐색으로 교체 (합성 첫 실행에서 발견). [0.05, 20] 경계 경고.
+- Ouro-2.6B 호환 (E14 준비, 4090): (1) 백본 forward 에 `use_cache=False` 명시 — Ouro 의 `UniversalTransformerCache` 는 `key_cache` setter 가 없어 기본 `use_cache=True` 에서 죽음(로짓만 읽으므로 캐시 불필요). (2) Ouro 바디는 `(ModelOutput, hidden_states_list, gate_list)` 튜플을 돌려줌 → `_last_hidden()` 헬퍼로 표준/튜플 모두 처리. (3) 공유 prefix KV 캐시는 이 백본에서 불가 → 어떤 예외든 per-option 경로로 자동 폴백(메시지 1회). (4) transformers 5.x 에서 Ouro 커스텀 코드가 깨져(`pad_token_id`, RoPE `KeyError: 'default'`) 4090 에 `/venv/ouro`(transformers 4.54.1, peft 0.17.1) 별도 구성.
+- label 모드 26개 초과 예제 (`--label-overflow isolated|text`, 기본 isolated): 이전엔 77개를 프리픽스에 나열한 채 원문을 이어붙여 예제당 77×~600 토큰. 기본값을 "나열 없이 isolated 채점" 으로 바꿈(예제당 77×~80 토큰). E10 의 banking77 은 옛 방식(text)으로 학습됐으므로 재현 시 `--label-overflow text`.
+- 보정 재로드 메모리 정리(참조 해제 + gc + empty_cache) CUDA 에서 확인: Ouro 16건 학습 후 "gpu memory after release: 0.6 GB".
+
+## 열린 질문 / 다음
+1. ~~E7 epoch 2 + 보정 후 최종 표, 위치 불변성~~ → 완료 (E6/E7 최종, E9).
+2. cross-label에서 `--head-lr 5e-4` 효과: 단일 5e-5는 헤드가 느릴 수 있음. "안정적인데 v0에 붙어 있음"이면 이 손잡이.
+3. ARC-Challenge: 고립 검증(isolated) vs 비교 선택(label)의 격차가 어려운 문제에서 남는가.
+4. 한국어: klue_ynat, nsmc 같은 비교. 스크립트 데이터셋 로딩 거부 시 `convert.py csv`.
+5. 일반성: → E10 진행 중 (arc+boolq+banking77 학습, OBQA/CSQA/HellaSwag held-out).
+6. source별 temperature (E5 T=1.51 문제).
+7. cross 모드 prefix KV 캐시 공유 (긴 state × 많은 선택지 비용).
+8. 정확도에 bootstrap 신뢰구간 붙이기 (릴리스 표용).
+9. 릴리스: 이름 변경(Jev/System One 상표 회피), Apache 2.0, 모델 카드에 데이터 라이선스(ARC/KLUE CC BY-SA 4.0, BoolQ CC BY-SA 3.0, NSMC CC0)와 캘리브레이션 리포트. 공개 가중치는 공개 데이터만으로.
+
+## 한 줄 요약 (현재 시점)
+같은 Qwen2.5-3B, 학습 파라미터 1%, 4080 한 장 45분. 백본이 아는 것(ARC 93%)은 지키고, 모르던 것(BoolQ 80→88%)은 얻고, NLL은 0.379→0.273. 캘리브레이션은 잃지 않음.
