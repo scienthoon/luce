@@ -99,6 +99,29 @@ Accuracy transfers: on two of three unseen datasets Luce matches the prompting b
 
 **Practical rule that follows:** ship with 100–300 real labeled items. `luce eval --real` fits the temperature on them and `luce train --real` selects the checkpoint on them; without `--real`, every number Luce prints is tagged `[in-synth]` and no temperature is written to the checkpoint.
 
+### Four real tasks, same test items for us and for Jev (E17)
+
+Qwen3-4B-Base, 2–3 epochs on one consumer GPU (RTX 4070 SUPER 12 GB, ~40 min per task), temperature refit on a
+held-out calibration split, evaluated once on a test split. Jev is TypeSafe's hosted model through Vercel AI Gateway,
+zero-shot on the identical test records. Data collection scripts are in `scripts/`; details in `EXPERIMENTS.md` E17.
+
+| task (test items) | labels used for training | Luce | Jev (0-shot) | ECE Luce / Jev |
+|---|---|---|---|---|
+| Phishing e-mail, noul (500; PhishNChips v5.2, the jev-phishing-bench set) | 1,000 | **97.4** | 62.6 | 0.010 / 0.154 |
+| Organisational-rule tickets, 3 questions (2,964; rule-generated gold, training data written by an LLM) | 3,000 | **91.1** | 75.1 | 0.022 / 0.107 |
+| GitHub issue kind, 4-way (500; kubernetes maintainer labels) | 500 | 86.9 | 84.7 | 0.044 / 0.100 |
+| GitHub issue priority, 4 levels (73) | 462 | 41.1 | 37.5 | — |
+| Maze risk level, 4 levels (2,640; exact probabilities) | 1,500 | **85.3** | 65.6 | 0.041 / 0.221 |
+| Maze safest move, 4-way (2,640) | 1,500 | 29.2 | 41.4 | — |
+
+What this says: where the label is a function of the input (phishing, tickets, maze risk), a few hundred to a few
+thousand labels beat the zero-shot model by 20–35 points and give calibrated probabilities. Where it is not — GitHub
+`kind` is already solved by the backbone (prompting alone: 83), `priority` is assigned by triage policy the text does
+not contain (prompting alone: 30, majority class: 30), and the maze `safest move` needs three-step lookahead the model
+does not learn from 500 mazes — training adds little or fails, and the calibrated probability shows it (priority: only
+10 % of items reach 0.6 confidence). Jev is the same order of magnitude in latency (0.25 s per call on a 4070 SUPER for
+us vs 0.11 s on TypeSafe's servers) and needs no training; Luce needs labels and wins where labels carry a rule.
+
 ## How it works
 
 ```
