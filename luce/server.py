@@ -43,6 +43,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .core import JevLocal, answers_to_dict, question_from_dict
@@ -174,6 +175,32 @@ def _get_engine() -> Any:
     if _engine is None:
         raise HTTPException(status_code=503, detail="engine not loaded yet")
     return _engine
+
+
+@app.get("/demo", response_class=HTMLResponse)
+def demo_page() -> str:
+    """브라우저 데모: 티켓 피드 + 확률 막대 + 검토 큐 + 타이핑 실시간 채점. 같은 origin 이라 CORS 불필요."""
+    path = os.path.join(os.path.dirname(__file__), "demo.html")
+    with open(path, "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
+@app.get("/demo/tickets")
+def demo_tickets() -> JSONResponse:
+    """데모 피드용 표본 티켓. LUCE_DEMO_TICKETS=<json> 이 있으면 그 파일, 없으면 패키지의 demo_tickets.json."""
+    path = os.environ.get("LUCE_DEMO_TICKETS") or os.path.join(os.path.dirname(__file__), "demo_tickets.json")
+    with open(path, "r", encoding="utf-8") as handle:
+        return JSONResponse(content=json.load(handle))
+
+
+@app.get("/demo/replay")
+def demo_replay() -> JSONResponse:
+    """데모 재생용: 실제 서버가 낸 답과 지연을 저장한 파일 (LUCE_DEMO_REPLAY 또는 패키지의 demo_replay.json). GPU 없이 /demo?replay=1."""
+    path = os.environ.get("LUCE_DEMO_REPLAY") or os.path.join(os.path.dirname(__file__), "demo_replay.json")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="no replay file; run scripts/make_replay.py against a live server")
+    with open(path, "r", encoding="utf-8") as handle:
+        return JSONResponse(content=json.load(handle))
 
 
 @app.get("/health", response_model=HealthResponse)

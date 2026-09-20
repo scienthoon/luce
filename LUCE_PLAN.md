@@ -41,3 +41,6 @@ Luce = Qwen 백본 위 1% 파라미터(LoRA + 결정 헤드)를 학습해 Choice
 - [x] README(훅·퀵스타트·히어로 표·한계·약관·선행 작업), docs/ARCHITECTURE.md, 모델 카드 5개, 단위 테스트
 - [ ] HF 업로드 `luce-examples/` (사용자 지시로 보류)
 - [ ] openjev 열 측정, 시퀀스 예산 배처(기술 부채)
+
+## 데모 (2026-09-20)
+`luce serve` 가 `/demo` 를 같이 띄운다: 티켓 피드 → 질문 3개 확률 막대·지연·누적 비용, 0.9 미만은 검토 큐, 타이핑하면 실시간 재채점. `scripts/make_replay.py` 로 실제 서버 출력(답+지연)을 `luce/demo_replay.json` 에 저장하면 `/demo?replay=1`(또는 정적 서버의 `demo.html?replay=1`) 로 GPU 없이 같은 화면을 재생한다(화면에 replay 표시). `scripts/record_demo.py` 가 Playwright 로 녹화해 `media/live_triage.{mp4,gif}` 를 만든다.

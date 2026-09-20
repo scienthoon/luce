@@ -22,3 +22,5 @@ scripts/node_modules/
 v2/
 !media/
 !media/*.gif
+media/*.webm
+media/*_video/

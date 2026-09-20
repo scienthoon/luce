@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Luce live triage</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b35; --text:#e6e8ee; --muted:#8b93a5; --acc:#5ee1c1; --warn:#ffb454; --bad:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font: 14px/1.4 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  header { display:flex; align-items:center; gap:14px; padding:12px 18px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; font-weight:600; letter-spacing:.2px; }
+  header .tag { color:var(--muted); font-size:12px; }
+  header .stats { margin-left:auto; display:flex; gap:22px; font-variant-numeric: tabular-nums; }
+  header .stats div { text-align:right; } header .stats b { display:block; font-size:16px; color:var(--acc); }
+  header .stats span { color:var(--muted); font-size:11px; }
+  main { display:grid; grid-template-columns: 1.1fr 1fr; gap:14px; padding:14px 18px; height: calc(100vh - 58px); }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; overflow:hidden; display:flex; flex-direction:column; }
+  section h2 { font-size:12px; color:var(--muted); margin:0 0 10px; text-transform:uppercase; letter-spacing:.8px; }
+  #inbox { overflow:auto; flex:1; }
+  .ticket { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:8px; background:#12151b; display:grid; grid-template-columns: 1fr 250px; gap:10px; animation: pop .25s ease; }
+  @keyframes pop { from { transform: translateY(-6px); opacity:0 } to { transform:none; opacity:1 } }
+  .ticket .meta { color:var(--muted); font-size:11px; margin-bottom:4px; }
+  .ticket .subject { font-weight:600; margin-bottom:3px; }
+  .ticket .body { color:#c9cfdb; font-size:13px; max-height:3.9em; overflow:hidden; }
+  .decision { font-size:12px; }
+  .decision .row { display:flex; align-items:center; gap:6px; margin:2px 0; }
+  .decision .k { width:62px; color:var(--muted); }
+  .bar { flex:1; height:8px; background:#232833; border-radius:4px; overflow:hidden; }
+  .bar i { display:block; height:100%; background:var(--acc); transition: width .35s ease; }
+  .bar.warn i { background:var(--warn); } .bar.bad i { background:var(--bad); }
+  .decision .v { width:36px; text-align:right; font-variant-numeric: tabular-nums; }
+  .decision .lat { color:var(--muted); font-size:11px; margin-top:4px; }
+  .flag { display:inline-block; font-size:10px; padding:1px 6px; border-radius:10px; background:#3a2a10; color:var(--warn); margin-left:6px; }
+  #right { display:grid; grid-template-rows: auto 1fr; gap:14px; }
+  textarea { width:100%; min-height:110px; background:#0c0e12; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:10px; font: 14px/1.4 inherit; resize:vertical; }
+  .live { margin-top:10px; }
+  .live .row { display:flex; align-items:center; gap:8px; margin:6px 0; }
+  .live .k { width:90px; color:var(--muted); font-size:12px; }
+  .live .bar { height:14px; }
+  .live .v { width:60px; text-align:right; font-variant-numeric: tabular-nums; }
+  .live .lat { color:var(--muted); font-size:12px; margin-top:6px; }
+  #review { overflow:auto; }
+  .rv { border-left:3px solid var(--warn); padding:6px 10px; margin-bottom:6px; background:#12151b; font-size:12px; }
+  .rv b { color:var(--warn); }
+  .rv .muted { color:var(--muted); }
+  button { background:var(--acc); color:#08221c; border:0; border-radius:6px; padding:6px 12px; font-weight:600; cursor:pointer; }
+  .controls { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+  .controls span { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Luce · live ticket triage</h1>
+  <span class="tag" id="model">Qwen3-4B-Base + LoRA · one consumer GPU · typed calibrated decisions, no generation</span>
+  <div class="stats">
+    <div><b id="n">0</b><span>decisions</span></div>
+    <div><b id="lat">–</b><span>ms / ticket (3 questions)</span></div>
+    <div><b id="cost">$0.0000</b><span>GPU cost so far</span></div>
+    <div><b id="auto">0%</b><span>auto-handled ≥ 0.9</span></div>
+  </div>
+</header>
+<main>
+  <section>
+    <div class="controls"><button id="start">start feed</button><span id="feedinfo">incoming support tickets, one every 1.5 s</span></div>
+    <h2>Inbox → queue · priority · anger</h2>
+    <div id="inbox"></div>
+  </section>
+  <div id="right">
+    <section>
+      <h2>Type a ticket — probabilities follow as you type</h2>
+      <textarea id="typed" placeholder="subject / body of a ticket..."></textarea>
+      <div class="live">
+        <div class="row"><div class="k">queue</div><div class="bar"><i id="q_bar" style="width:0"></i></div><div class="v" id="q_v">–</div></div>
+        <div class="row"><div class="k">priority</div><div class="bar warn"><i id="p_bar" style="width:0"></i></div><div class="v" id="p_v">–</div></div>
+        <div class="row"><div class="k">angry</div><div class="bar bad"><i id="a_bar" style="width:0"></i></div><div class="v" id="a_v">–</div></div>
+        <div class="lat" id="typed_lat"></div>
+      </div>
+    </section>
+    <section>
+      <h2>Review queue — calibrated max-prob under 0.90, a human labels these</h2>
+      <div id="review"></div>
+    </section>
+  </div>
+</main>
+<script>
+const Q = {
+  queue:    {type:"choice", prompt:"Which support queue should handle this ticket?",
+             options:{billing:"Payments, refunds, duplicate charges", shipping:"Delivery status, lost or damaged packages", technical:"App or website bugs, login problems", general:"Questions, feedback, anything else"}},
+  priority: {type:"score", prompt:"How should this ticket be prioritized?", levels:["Low","Normal","High","Critical"]},
+  angry:    {type:"noul", prompt:"The customer sounds angry."}
+};
+const GPU_USD_PER_HOUR = 0.10;   // one RTX 4070 SUPER on a rental market
+let n = 0, latSum = 0, autoN = 0, feeding = false, tickets = [];
+const $ = id => document.getElementById(id);
+
+const REPLAY = new URLSearchParams(location.search).get("replay");
+let replay = null;   // {feed:[{state,answers,review,ms}], typed:[{subject,body,prefixes:[{text,answers,review,ms}]}]}
+async function loadReplay() {
+  if (!REPLAY || replay) return;
+  // 정적 호스팅(GPU 없음)에서는 같은 폴더의 demo_replay.json, 서버 뒤에서는 /demo/replay
+  let r = await fetch("demo_replay.json"); if (!r.ok) r = await fetch("/demo/replay");
+  replay = await r.json();
+  $("model").textContent = "replay of recorded outputs · " + (replay.recorded_with || "");
+}
+async function ask(state) {
+  if (REPLAY) {                           // replay: recorded answer for this exact state, wait the recorded latency
+    await loadReplay();
+    const key = JSON.stringify(state);
+    const hit = replay.feed.find(f => JSON.stringify(f.state) === key)
+      || replay.typed.flatMap(t => t.prefixes.map(x => ({state:{channel:"chat", customer_tier:"gold", subject:t.subject, body:x.text}, answers:x.answers, review:x.review, ms:x.ms})))
+               .find(f => f.state.subject === state.subject && f.state.body === state.body);
+    if (!hit) throw new Error("no recorded answer for this input");
+    await new Promise(r => setTimeout(r, hit.ms));
+    return {answers: hit.answers, review: hit.review, ms: hit.ms};
+  }
+  const t0 = performance.now();
+  const r = await fetch("/v1/ask", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({state, questions:Q})});
+  const j = await r.json(); j.ms = performance.now() - t0; return j;
+}
+function pct(x) { return Math.round(x * 100) + "%"; }
+function argmax(probs) { return Object.entries(probs).sort((a,b)=>b[1]-a[1])[0]; }
+function render(state, j) {
+  const a = j.answers, q = argmax(a.queue.probabilities), p = argmax(a.priority.probabilities), ang = a.angry.noul;
+  const rv = j.review || {};
+  const flag = k => rv[k] ? '<span class="flag">review</span>' : '';
+  const cls = (k, v) => v >= 0.9 ? '' : (v >= 0.6 ? ' warn' : ' bad');
+  const el = document.createElement("div"); el.className = "ticket";
+  el.innerHTML = `
+    <div><div class="meta">${state.channel} · ${state.customer_tier}</div>
+      <div class="subject">${esc(state.subject)}</div><div class="body">${esc(state.body)}</div></div>
+    <div class="decision">
+      <div class="row"><div class="k">queue</div><div class="bar${cls('q',q[1])}"><i style="width:${q[1]*100}%"></i></div><div class="v">${pct(q[1])}</div></div>
+      <div class="row"><div class="k"></div><div style="flex:1">${q[0]}${flag('queue')}</div></div>
+      <div class="row"><div class="k">priority</div><div class="bar${cls('p',p[1])}"><i style="width:${p[1]*100}%"></i></div><div class="v">${pct(p[1])}</div></div>
+      <div class="row"><div class="k"></div><div style="flex:1">${p[0]} <span style="color:var(--muted)">(expected ${a.priority.score.toFixed(2)})</span>${flag('priority')}</div></div>
+      <div class="row"><div class="k">angry</div><div class="bar bad"><i style="width:${ang*100}%"></i></div><div class="v">${pct(ang)}</div></div>
+      <div class="lat">${j.ms.toFixed(0)} ms</div>
+    </div>`;
+  const inbox = $("inbox"); inbox.prepend(el); while (inbox.children.length > 12) inbox.lastChild.remove();
+  const flagged = Object.entries(rv).filter(([k,v])=>v).map(([k])=>k);
+  if (flagged.length) {
+    const r = document.createElement("div"); r.className = "rv";
+    r.innerHTML = `<b>${flagged.join(", ")}</b> · ${esc(state.subject)} <span class="muted">· model says ${flagged.map(k => k==="queue"?q[0]:k==="priority"?p[0]:pct(ang)).join(", ")} · label: <i>empty</i></span>`;
+    $("review").prepend(r);
+  }
+  n++; latSum += j.ms; if (!flagged.length) autoN++;
+  $("n").textContent = n; $("lat").textContent = (latSum/n).toFixed(0);
+  $("cost").textContent = "$" + (latSum/1000/3600*GPU_USD_PER_HOUR).toFixed(4);
+  $("auto").textContent = Math.round(100*autoN/n) + "%";
+}
+function esc(s) { return String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+async function feed() {
+  if (!tickets.length) { if (REPLAY) { await loadReplay(); tickets = replay.feed; } else tickets = await (await fetch("/demo/tickets")).json(); }
+  let i = 0;
+  while (feeding && i < tickets.length) {
+    const s = tickets[i++].state;
+    try { render(s, await ask(s)); } catch (e) { console.error(e); }
+    await new Promise(r => setTimeout(r, 1500));
+  }
+}
+$("start").onclick = () => { feeding = !feeding; $("start").textContent = feeding ? "pause feed" : "start feed"; if (feeding) feed(); };
+let typedTimer = null, typedSeq = 0;
+$("typed").addEventListener("input", () => {
+  clearTimeout(typedTimer);
+  typedTimer = setTimeout(async () => {
+    const text = $("typed").value.trim(); if (text.length < 8) return;
+    const [subject, ...rest] = text.split("\n"); const seq = ++typedSeq;
+    let state = {channel:"chat", customer_tier:"gold", subject, body: rest.join(" ") || subject};
+    if (REPLAY) { await loadReplay();
+      // 같은 subject 의 모든 기록 스크립트에서, 지금 친 본문과 앞부분이 일치하는 가장 긴 접두어를 고른다
+      const cands = replay.typed.filter(t => t.subject === subject).flatMap(t => t.prefixes)
+        .filter(x => state.body.startsWith(x.text) || (x.text.startsWith(state.body) && state.body.length >= 8))
+        .sort((a, b) => b.text.length - a.text.length);
+      const exact = cands.filter(x => state.body.startsWith(x.text));
+      const pre = (exact.length ? exact : cands)[0]; if (!pre) return;
+      state = {channel:"chat", customer_tier:"gold", subject, body: pre.text}; }
+    const j = await ask(state); if (seq !== typedSeq) return;
+    const a = j.answers, q = argmax(a.queue.probabilities), p = argmax(a.priority.probabilities);
+    $("q_bar").style.width = (q[1]*100)+"%"; $("q_v").textContent = q[0] + " " + pct(q[1]);
+    $("p_bar").style.width = (p[1]*100)+"%"; $("p_v").textContent = p[0] + " " + pct(p[1]);
+    $("a_bar").style.width = (a.angry.noul*100)+"%"; $("a_v").textContent = pct(a.angry.noul);
+    $("typed_lat").textContent = j.ms.toFixed(0) + " ms · " + Object.entries(j.review||{}).filter(([k,v])=>v).map(([k])=>k+" → review").join(", ");
+  }, 350);
+});
+</script>
+</body>
+</html>
