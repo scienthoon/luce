@@ -403,7 +403,7 @@ Jev 가 존재를 알 수 없는 규칙 기반 데이터. queue/angry 는 의미
 - **Jev 0샷, 같은 test 셋** (Vercel AI Gateway `typesafe-ai/jev`, 동시성 8, `logs/jev_four/`): GitHub test 500 중 478 응답(22건 max_tokens 초과): 전체 77.6, kind 84.7 (ECE 0.100), priority 37.5 (ECE 0.240), 전체 ECE 0.109, $0.03. 미로 test 2,619/2,640: 전체 64.4, safe_move 41.4 / death 86.3 / risk 65.6, ECE 0.135; ood 1,199: 66.2 (48.6 / 88.0 / 62.0), ECE 0.156. $0.05.
 - **github_issues 완료 (02:29, 재시작분 41분; 600 행 × 2 epoch = 76 스텝, qlen 768)**: 0스텝 val150 82.0 (kind 86.2 / priority 63.0) → epoch 1 83.3 → epoch 2 (kind 87.8 / priority 63.0, 27건). calibration 200: kind 90.6 / priority 31.0, T kind 0.77 / score 1.98. **test 500: 전체 78.0, kind 85.9 (ECE 0.044), priority 31.5 (73건, ECE 0.151), 전체 ECE 0.066.** 같은 500 에서 Jev 0샷 77.6 (kind 84.7 / priority 37.5, ECE 0.109). 판정: 이 예산(600 행)으로는 학습이 얹은 게 없음 — kind 는 0스텝 = Jev = 학습 후 (모두 85 근처, 관리자 라벨 자체의 잡음 천장일 가능성), priority 는 train 에 score 행이 ~100개뿐이라 배우지 못함(val27 의 63.0 은 표본 잡음). 전체 2,817 행(score 462) × 2 epoch 재실행이 필요 (4090 ~50분).
 - **maze test 2,640 (02:32; 재시작분 1,500 행 = 500 상황 × 2 epoch)**: 0스텝 val450 44.4 (safe_move 42.7 / death 90.0 / risk 0.7) → epoch 1 72.2 (38.0 / 90.0 / 88.7) → epoch 2 (20.0 / 90.0 / 88.7). calibration 900: safe_move 23.3 / death 96.7 / risk 96.7, T choice **20.0**(신호 없음) / noul 0.91 / score 1.01. **test: 전체 66.9, safe_move 29.2 (찍기 25 근처, ECE 0.019), death 86.1 (ECE 0.120), risk 85.3 (ECE 0.041), 전체 ECE 0.060.** 같은 test 에서 Jev 0샷 64.4 (41.4 / 86.3 / 65.6, ECE 0.135). 판정: risk(사망확률 구간) 는 0.7 → 85.3 으로 학습이 크게 얹었고 Jev 보다 20점 위; death 는 둘 다 다수 클래스 근처; **safe_move(3수 생존 최적 행동) 는 둘 다 못 품** — 우리는 학습 중 choice 헤드가 한 답으로 무너져 찍기보다 낮음(T→20 으로 확률은 균등에 가까워 ECE 는 낮음). 500 상황 × 2 epoch 으로는 7×7 ASCII 지도의 3수 계산을 못 배우는 것. NanoJev 공식 과제(navigation/local_safety/one_step_probability, 패키지의 `maze/official/`)로 재실행해 NanoJev 발표 숫자와 직접 비교하는 것이 다음.
-- maze ood 1,200 (50×50 맵): 전체 65.4, safe_move 20.3 / death 88.0 / risk 88.0, ECE 0.061 (Jev 66.2: 48.6 / 88.0 / 62.0, ECE 0.156). risk 는 학습 후 크기가 다른 맵에도 옮겨감(+26 vs Jev); safe_move 는 test 와 같이 무너진 상태.
+- maze ood 1,200 (50×50 맵): 전체 65.4, safe_move 20.3 / death 88.0 / risk 88.0, ECE 0.061 (Jev 66.2: 48.6 / 88.0 / 62.0, ECE 0.156). risk 는 학습 후 크기가 다른 맵에도 옮겨감(+26 vs Jev); safe_move 는 test 와 같이 무너진 상태.  **[E17-C 정정: risk/death 의 88.0 은 상수 예측이다 — 400건 전부 `3` / 전부 `yes`, 다수 기준선 352/400 = 88.0 과 동일. soft target 으로도 학습셋 상수 분포보다 나쁘다(NLL 0.558 vs 0.459, Brier 0.231 vs 0.219). safe_move 20.3 은 다수 답 36.5 보다 16pp 낮고 예측이 south 257 / north 143 로 두 방향뿐이다. "큰 맵으로 전이된다" 는 읽기는 무효.]**
 - **rule_tickets 완료 (02:39, 76분; 3,000 행 × 2 epoch = 376 스텝, asciinema 녹화)**: 0스텝 val 62.1 → epoch 1 91.9 → epoch 2 91.4 (best = epoch 2, calibrated NLL 0.195, T 1.65). calibration 1,533: 90.9 (queue 100.0 / angry 98.6 / priority 74.2), 타입별 T choice 0.05(하한; 항상 맞히면서 확률이 낮아 T 를 바닥까지 내림) / noul 1.31 / score 1.93. **test 2,964 (규칙 생성기, 노이즈 0): 전체 91.1, queue 100.0, angry 98.6, priority 74.6, NLL 0.187, ECE 0.022.** Jev 0샷은 같은 규칙 과제(E13, 900건)에서 75.1 (89.0 / 91.7 / 44.7, ECE 0.107). **6번 과제(문장 → LLM 합성 데이터 → 모델, 규칙 생성기 시험) 통과**: LLM(DeepSeek V4.1 Flash) 이 규칙을 읽고 붙인 라벨만으로 배워 확정 규칙 시험에서 91%. 남은 9점은 priority(4단계 규칙, 티처가 규칙을 덜 정확히 적용한 곳으로 추정 — teacher_calls.jsonl 로 확인 가능).
 - **E17 4070S 분 요약 (같은 test, 우리 4B 학습 vs Jev 0샷)**: phishing 97.4 vs 62.6 · rule_tickets 91.1 vs 75.1(E13) · github 78.0 vs 77.6(비김, 600 행) · maze 66.9 vs 64.4(risk 이김, safe_move 짐). 넷 다 ECE 는 우리가 낮음(0.010~0.066 vs 0.109~0.154).
 - **GitHub 기준선 점검 (test 500)**: kind 다수 클래스(bug) 62.8% → 우리 85.9 / Jev 84.7 은 실력(+23). priority 다수 클래스(important-soon) 30.1% → **우리 31.5 는 다수 답 붕괴**(73건 중 72건을 '2' 로 예측; 레벨 순서 Backlog→long-term→soon→urgent 는 정상, 렌더링 문제 아님), Jev 37.5 는 네 단계를 다 쓰며 다수보다 조금 위. 학습 600 행 중 score 행 ~100 개로는 주변 분포만 외운 것(미로 safe_move 와 같은 실패 형태). train 462 행 분포: long-term 33 / soon 32 / backlog 23 / urgent 13 %.
@@ -442,6 +442,16 @@ Jev 가 존재를 알 수 없는 규칙 기반 데이터. queue/angry 는 의미
   미로는 세 질문 모두 실패이며 이 과제에서 학습 효과는 없다.
 - **왜 놓쳤나**: GitHub 에서는 다수 기준선을 찍어 priority 붕괴를 잡아냈는데(E17 line 409), 나머지 과제에는 같은 점검을
   하지 않았다. 다수 답이 높은 질문에서는 정확도만 보면 붕괴와 학습이 구분되지 않는다.
+- **OOD(50×50, 1,200) 도 같다** — 우리가 "6배 큰 맵으로 전이된다" 고 읽은 부분:
+
+  | 미로 OOD 질문 | n | 우리 | 다수 답 | 예측 |
+  |---|---|---|---|---|
+  | risk | 400 | 88.00 | **88.00** (352/400) | 400건 전부 `3` |
+  | death | 400 | 88.00 | **88.00** (352/400) | 400건 전부 `yes` |
+  | safest move | 400 | 20.25 | 36.50 | south 257 / north 143 (두 방향뿐) |
+
+  soft target 으로도 학습셋 상수 분포가 낫다(NLL 0.459 vs 우리 0.558, Brier 0.219 vs 0.231). 전이가 아니라
+  **OOD 쪽 다수 클래스 비중이 더 커서 상수 예측의 점수가 올라간 것**이다.
 - **조치**: README 표에 **majority 열**을 전 과제에 추가하고 미로 행을 "학습 효과 없음" 으로 정정. 아래 전체 점검 결과.
 
 | 과제 | 질문 | n | 우리 | 다수 답 | 차이 | 판정 |
