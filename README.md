@@ -134,22 +134,40 @@ Qwen3-4B-Base, 2–3 epochs on one consumer GPU (RTX 4070 SUPER 12 GB, ~40 min p
 held-out calibration split, evaluated once on a test split. Jev is TypeSafe's hosted model through Vercel AI Gateway,
 zero-shot on the identical test records. Data collection scripts are in `scripts/`; details in `EXPERIMENTS.md` E17.
 
-| task (test items) | labels used for training | Luce | Jev (0-shot) | ECE Luce / Jev |
-|---|---|---|---|---|
-| Phishing e-mail, noul (500; PhishNChips v5.2, the jev-phishing-bench set) | 1,000 | **97.4** | 62.6 | 0.010 / 0.154 |
-| Organisational-rule tickets, 3 questions (2,964; rule-generated gold, training data written by an LLM) | 3,000 | **91.1** | 75.1 | 0.022 / 0.107 |
-| GitHub issue kind, 4-way (500; kubernetes maintainer labels) | 500 | 86.9 | 84.7 | 0.044 / 0.100 |
-| GitHub issue priority, 4 levels (73) | 462 | 41.1 | 37.5 | — |
-| Maze risk level, 4 levels (2,640; exact probabilities) | 1,500 | **85.3** | 65.6 | 0.041 / 0.221 |
-| Maze safest move, 4-way (2,640) | 1,500 | 29.2 | 41.4 | — |
+The **majority** column is the accuracy of always answering that question's most common test label. A result is only
+evidence of learning if it clears that column — see the maze rows, which do not.
 
-What this says: where the label is a function of the input (phishing, tickets, maze risk), a few hundred to a few
-thousand labels beat the zero-shot model by 20–35 points and give calibrated probabilities. Where it is not — GitHub
-`kind` is already solved by the backbone (prompting alone: 83), `priority` is assigned by triage policy the text does
-not contain (prompting alone: 30, majority class: 30), and the maze `safest move` needs three-step lookahead the model
-does not learn from 500 mazes — training adds little or fails, and the calibrated probability shows it (priority: only
-10 % of items reach 0.6 confidence). Jev is the same order of magnitude in latency (0.25 s per call on a 4070 SUPER for
-us vs 0.11 s on TypeSafe's servers) and needs no training; Luce needs labels and wins where labels carry a rule.
+| task (test items) | labels used for training | Luce | majority | Jev (0-shot) | ECE Luce / Jev |
+|---|---|---|---|---|---|
+| Phishing e-mail, noul (500; PhishNChips v5.2, the jev-phishing-bench set) | 1,000 | **97.4** | 50.0 | 62.6 | 0.010 / 0.154 |
+| Organisational-rule tickets, queue 4-way (988) | 3,000 | **100.0** | 26.6 | — | — |
+| Organisational-rule tickets, priority 4 levels (988) | 3,000 | **74.6** | 36.8 | — | — |
+| Organisational-rule tickets, angry noul (988) | 3,000 | **98.6** | 71.8 | — | — |
+| Organisational-rule tickets, 3 questions combined (2,964) | 3,000 | **91.1** | 45.1 | 75.1 | 0.022 / 0.107 |
+| GitHub issue kind, 4-way (500; kubernetes maintainer labels) | 500 | 86.9 | 62.8 | 84.7 | 0.044 / 0.100 |
+| GitHub issue priority, 4 levels (73) | 962 | 41.1 | 30.1 | 37.5 | — |
+| Maze risk level, 4 levels (880) | 1,500 | 85.3 | **85.3** | 65.6 | 0.041 / 0.221 |
+| Maze death-within-3, noul (880) | 1,500 | 86.1 | **86.1** | — | — |
+| Maze safest move, 4-way (880) | 1,500 | 29.2 | **44.2** | 41.4 | — |
+
+What this says: where the label is a function of the input — phishing and the rule tickets — a few hundred to a few
+thousand labels beat both the majority answer (by 27–73 points) and the zero-shot model (by 16–35), and give calibrated
+probabilities. Where it is not, training adds nothing or hurts, and we say so:
+
+- **The maze task fails on all three questions.** `risk` and `death` collapse to a constant answer — every one of the
+  880 test items gets the same label, so the accuracy equals the majority baseline to the digit, and on the soft targets
+  the model is *worse* than predicting the training class distribution (NLL 0.668 vs 0.539, Brier 0.281 vs 0.264).
+  `safest move` needs three-step lookahead and lands 15 points *below* majority. Our earlier reading of the 85.3 as
+  "training beats Jev" was wrong; the honest statement is that Jev scores below a constant predictor here and so do we.
+  Credit to [@rusty-mcp](https://github.com/scienthoon/luce/issues) for reconstructing the labels from our generator and
+  catching it. See `EXPERIMENTS.md` E17-C.
+- GitHub `kind` is already mostly solved by the backbone (prompting alone: 83), and `priority` is assigned by triage
+  policy the text does not contain: majority 30.1 = prompting 30.1 < priority-only training 34.2 < Jev 37.5 < mixed
+  training 41.1, on 73 items (±11). Training moves it, but the margin is inside the noise and the calibrated
+  probability says so — no item reaches 0.8 confidence, only 10 % reach 0.6.
+
+Jev is the same order of magnitude in latency (0.25 s per call on a 4070 SUPER for us vs 0.11 s on TypeSafe's servers)
+and needs no training; Luce needs labels and wins where labels carry a rule.
 
 ## How it works
 

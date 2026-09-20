@@ -32,7 +32,9 @@ What we measured, same test items for us and for Jev (zero-shot via Vercel AI Ga
 - Support tickets with an organisational rule, training data written by an LLM from one paragraph: 91.1% vs 75.1
 - Phishing e-mails (the jev-phishing-bench set): 97.4% vs 62.6, ECE 0.010 vs 0.154
 - GitHub issue kind / priority (kubernetes maintainer labels): 86.9 / 41.1 vs 84.7 / 37.5
-- Maze risk level (exact probabilities): 85.3 vs 65.6; the "safest move" question neither of us solves
+- Maze: all three questions fail. `risk` and `death` collapse to a constant answer (85.3 / 86.1 = the majority
+  baseline to the digit), `safest move` lands below majority. Do not cite the maze numbers as a win — Jev scores below
+  a constant predictor there (65.6) and so do we.
 
 The honest summary is in the README: where the label is a function of the input, a few hundred to a few thousand labels
 beat the zero-shot model by 20–35 points; where it is not (policy-assigned priority, three-step lookahead), training
@@ -52,4 +54,4 @@ Same body as Show HN, plus: replay demo runs in the browser without a GPU; `luce
 
 **Luce — 문장 하나로 Jev 같은 결정 모델 만들기 (오픈소스, 12GB GPU)**
 TypeSafe Jev(텍스트 생성 없이 확률로 답하는 모델)를 자기 과제용으로 만드는 레시피. 과제 설명 → LLM이 학습 데이터 생성 → Qwen3-4B에 LoRA 학습 → 보정된 확률 서빙.
-규칙 티켓: LLM 생성 3,000개로 학습해 정답 2,964개에서 91.1% (Jev 0샷 75.1). 피싱 97.4 vs 62.6. 안 되는 경우(정책성 라벨, 3수 미로)도 표에 그대로.
+규칙 티켓: LLM 생성 3,000개로 학습해 정답 2,964개에서 91.1% (다수 답 45.1, Jev 0샷 75.1). 피싱 97.4 (다수 답 50.0) vs 62.6. 안 되는 경우도 표에 그대로: GitHub priority 는 표본 안 잡음, 미로는 세 질문 모두 상수 예측이라 학습 효과 없음.
