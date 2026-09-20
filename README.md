@@ -154,13 +154,32 @@ What this says: where the label is a function of the input — phishing and the 
 thousand labels beat both the majority answer (by 27–73 points) and the zero-shot model (by 16–35), and give calibrated
 probabilities. Where it is not, training adds nothing or hurts, and we say so:
 
-- **The maze task fails on all three questions.** `risk` and `death` collapse to a constant answer — every one of the
-  880 test items gets the same label, so the accuracy equals the majority baseline to the digit, and on the soft targets
-  the model is *worse* than predicting the training class distribution (NLL 0.668 vs 0.539, Brier 0.281 vs 0.264).
-  `safest move` needs three-step lookahead and lands 15 points *below* majority. Our earlier reading of the 85.3 as
-  "training beats Jev" was wrong; the honest statement is that Jev scores below a constant predictor here and so do we.
-  Credit to [@rusty-mcp](https://github.com/scienthoon/luce/issues) for reconstructing the labels from our generator and
-  catching it. See `EXPERIMENTS.md` E17-C.
+- **The maze task fails on all three questions as originally posed.** `risk` and `death` collapse to a constant answer
+  — every one of the 880 test items gets the same label, so the accuracy equals the majority baseline to the digit, and
+  on the soft targets the model is *worse* than predicting the training class distribution (NLL 0.668 vs 0.539, Brier
+  0.281 vs 0.264). `safest move` lands 15 points *below* majority. Our earlier reading of the 85.3 as "training beats
+  Jev" was wrong: Jev scores below a constant predictor here and so did we. Credit to
+  [TianyuCodings](https://github.com/TianyuCodings/NanoJev/issues/9) for reconstructing the labels from the public
+  generator and catching it. See `EXPERIMENTS.md` E17-C.
+- **Re-asking the same question fixes it.** Instead of learning "which move is best" (a target that erases *how* safe
+  each move is), learn one independent probability per direction — `Q3(s,a)` = survive three moves given first action
+  `a` — with soft targets, no normalisation across actions, and decide by argmax. Add rotation augmentation so the map
+  and the direction names transform together. Scored by survival regret, `max_a Q3(s,a) - Q3(s, chosen)`:
+
+  | maze, safest move | survival regret | tie-aware accuracy |
+  |---|---|---|
+  | Q3 targets + rotations | **0.058** | **68.1** |
+  | Q3 targets alone | 0.169 | 43.4 |
+  | original choice target | — | 44.7 |
+  | Jev (0-shot) | — | 55.3 |
+  | best constant (always north) | 0.177 | 44.2 |
+  | oracle | 0 | 100 |
+
+  On the 50×50 out-of-distribution maps, 6× larger than anything trained on, it is better still: regret 0.044,
+  tie-aware 70.5 against 0.177 / 42.0 for the best constant. The derived death probability
+  (`1 - mean_a Q3`) has MAE 0.045 against 0.155 for a constant. Both changes were needed — the target form alone fixed
+  the probabilities and left the ranking at chance. `scripts/make_maze_q3.py`, `scripts/eval_maze_q3.py`,
+  `EXPERIMENTS.md` E19.
 - GitHub `kind` is already mostly solved by the backbone (prompting alone: 83), and `priority` is assigned by triage
   policy the text does not contain: majority 30.1 = prompting 30.1 < priority-only training 34.2 < Jev 37.5 < mixed
   training 41.1, on 73 items (±11). Training moves it, but the margin is inside the noise and the calibrated
