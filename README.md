@@ -8,6 +8,22 @@ Luce is the open recipe for doing that with *your* task: `luce init` scaffolds t
 
 Three question types, same as TypeSafe's Jev interface: **Choice** (one of N options), **Score** (an ordered scale), **Noul** (a statement is true or false).
 
+## Demo
+
+Both recordings are unedited terminal casts of real runs (idle time capped at 2 s).
+
+**Training the organisational-rule ticket model** — 3,000 LLM-written tickets, Qwen3-4B-Base, one RTX 4070 SUPER,
+0-step → 2 epochs → temperature fit (test on rule-generated gold: 91.1 %, ECE 0.022):
+
+![luce train on rule tickets](media/rule_tickets_train.gif)
+
+**Serving it** — three tickets through `luce serve` (RTX 4070 SUPER, ~0.25 s per call): probabilities per queue /
+priority level / anger; the same ticket reworded calmly drops from Critical 0.99 to High 0.81 and anger from 1.00 to
+0.00; answers whose calibrated confidence is under the 0.9 threshold are appended to `review.jsonl` for a human, with
+the label left empty (`scripts/demo_serve.sh`):
+
+![luce serve demo](media/serve_demo.gif)
+
 ## 60-second quickstart
 
 ```bash

@@ -20,3 +20,5 @@ reports/
 review.jsonl
 scripts/node_modules/
 v2/
+!media/
+!media/*.gif
