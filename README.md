@@ -128,22 +128,32 @@ Accuracy transfers: on two of three unseen datasets Luce matches the prompting b
 
 **Practical rule that follows:** ship with 100–300 real labeled items. `luce eval --real` fits the temperature on them and `luce train --real` selects the checkpoint on them; without `--real`, every number Luce prints is tagged `[in-synth]` and no temperature is written to the checkpoint.
 
-### Four real tasks, same test items for us and for Jev (E17)
+### Four real tasks (E17)
 
 Qwen3-4B-Base, 2–3 epochs on one consumer GPU (RTX 4070 SUPER 12 GB, ~40 min per task), temperature refit on a
-held-out calibration split, evaluated once on a test split. Jev is TypeSafe's hosted model through Vercel AI Gateway,
-zero-shot on the identical test records. Data collection scripts are in `scripts/`; details in `EXPERIMENTS.md` E17.
+held-out calibration split, evaluated once on a test split. Data collection scripts are in `scripts/`; details in
+`EXPERIMENTS.md` E17.
 
-The **majority** column is the accuracy of always answering that question's most common test label. A result is only
-evidence of learning if it clears that column — see the maze rows, which do not.
+Two columns decide whether a row means anything. **majority** is the accuracy of always answering that question's most
+common test label; a result that does not clear it is not evidence of learning — see the maze rows. **Jev (0-shot)** is
+TypeSafe's hosted model, and the comparison is item-matched only where marked:
+
+- GitHub and maze: we ran Jev ourselves through Vercel AI Gateway on the identical test records (`logs/jev_four/`).
+- Phishing: the Jev figure is the benchmark author's published number on their full 2,000-e-mail set, not our 500-item
+  test split. We did not run Jev on phishing.
+- Rule tickets: the Jev figure comes from E13, a 900-item validation set of the same generator, not from this 2,964-item
+  test split.
+
+Where the comparison is not item-matched the Jev column is marked with a dagger (†) and should be read as a reference
+point, not a paired result.
 
 | task (test items) | labels used for training | Luce | majority | Jev (0-shot) | ECE Luce / Jev |
 |---|---|---|---|---|---|
-| Phishing e-mail, noul (500; PhishNChips v5.2, the jev-phishing-bench set) | 1,000 | **97.4** | 50.0 | 62.6 | 0.010 / 0.154 |
+| Phishing e-mail, noul (500; PhishNChips v5.2, the jev-phishing-bench set) | 1,000 | **97.4** | 50.0 | 62.6† | 0.010 / 0.154† |
 | Organisational-rule tickets, queue 4-way (988) | 3,000 | **100.0** | 26.6 | — | — |
 | Organisational-rule tickets, priority 4 levels (988) | 3,000 | **74.6** | 36.8 | — | — |
 | Organisational-rule tickets, angry noul (988) | 3,000 | **98.6** | 71.8 | — | — |
-| Organisational-rule tickets, 3 questions combined (2,964) | 3,000 | **91.1** | 45.1 | 75.1 | 0.022 / 0.107 |
+| Organisational-rule tickets, 3 questions combined (2,964) | 3,000 | **91.1** | 45.1 | 75.1† | 0.022 / 0.107† |
 | GitHub issue kind, 4-way (500; kubernetes maintainer labels) | 500 | 86.9 | 62.8 | 84.7 | 0.044 / 0.100 |
 | GitHub issue priority, 4 levels (73) | 962 | 41.1 | 30.1 | 37.5 | — |
 | Maze risk level, 4 levels (880) — constant predictor, see below | 1,500 | 85.3 | **85.3** | 65.6 | 0.041 / 0.221 |

@@ -544,6 +544,23 @@ OOD(400) 에서는 조금 낫다: regret 0.158 vs 최선 상수 0.177, tie-aware
 - 다음: 1→2→3수 커리큘럼, 반사까지 8배, 맵 수 늘리기, 그리고 관리자가 준 원본 과제
   (navigation / local_safety / one_step_probability)를 따로.
 
+### E17-D. 정정: Jev 비교 넷 중 둘은 같은 항목에서 잰 게 아니다 (2026-09-21)
+E17 을 "같은 test 셋에서 우리 vs Jev" 로 적었는데, 아티팩트를 세어 보니 사실이 아니다.
+
+| 과제 | Jev 숫자 | 실제 출처 | 항목 일치 |
+|---|---|---|---|
+| GitHub kind/priority | 84.7 / 37.5 | 우리 실행, `logs/jev_four/jev_github_test500.jsonl` (500 행) | ✅ |
+| maze risk/death/safe_move | 65.6 / 86.3 / 41.4 | 우리 실행, `jev_maze_test.jsonl` (2,640) · `jev_maze_ood.jsonl` (1,200) | ✅ |
+| **phishing 62.6 / ECE 0.154** | anisselbd/jev-phishing-bench README 의 **2,000 통 전체** 수치 | **우리는 피싱에서 Jev 를 돌린 적이 없다** | ❌ |
+| **rule_tickets 75.1 / ECE 0.107** | **E13 의 val 900** (E1 생성기, seed 0) | test 2,964 가 아니다 | ❌ |
+
+- `logs/jev_four/` 에 phishing 파일이 없다는 것이 증거다. 네 과제 중 Jev 를 실제로 돌린 것은 GitHub 와 maze 뿐이다.
+- 이 오류는 E17-C(미로 상수 예측)와 같은 종류다: **비교의 양쪽이 같은 조건인지 확인하지 않고 표에 나란히 놓았다.**
+- 조치: README 의 "same test items for us and for Jev" 제목과 문장을 고치고, 항목 불일치 행에 † 를 붙여 출처를 명시.
+  jev-phishing-bench#1 이슈에도 정정 댓글(우리가 Jev 를 돌리지 않았다는 사실 + 다수 기준선 50.0).
+- 되돌리려면: AI Gateway 로 같은 test 500 에 Jev 를 돌리면 된다(500 콜, 몇 분). 그때까지는 † 로 둔다.
+- **규칙**: 비교 표의 각 칸은 출처(우리 실행인지 인용인지)와 항목 수를 함께 기록한다. 인용 수치는 반드시 표시한다.
+
 ### E18. 과제 전용 구조적 가지치기: "이 과제엔 파라미터가 몇 개 필요한가, 어디까지 정직한가" (계획, 2026-09-20)
 질문 셋. (1) 규칙 티켓으로 학습한 Qwen3-4B 에서 층·FFN 뉴런·KV 그룹을 과제 손실 기준으로 잘라 가면 정확도가 어디서 꺾이는가. (2) 캘리브레이션(ECE·T)이 정확도보다 먼저 무너지는가 (Don't Go Breaking My LLM, 2026). (3) 잘라서 1.7B·0.6B 근처가 된 모델이 같은 크기를 직접 학습한 E15 사다리(84.3 / 82.1)보다 나은가 (Sheared LLaMA 가설).
 - 시작점: `checkpoints/four/rule_tickets` (4B + LoRA, test 91.1 / ECE 0.022). LoRA 병합 → dense.
