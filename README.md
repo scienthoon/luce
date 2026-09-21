@@ -146,9 +146,10 @@ evidence of learning if it clears that column — see the maze rows, which do no
 | Organisational-rule tickets, 3 questions combined (2,964) | 3,000 | **91.1** | 45.1 | 75.1 | 0.022 / 0.107 |
 | GitHub issue kind, 4-way (500; kubernetes maintainer labels) | 500 | 86.9 | 62.8 | 84.7 | 0.044 / 0.100 |
 | GitHub issue priority, 4 levels (73) | 962 | 41.1 | 30.1 | 37.5 | — |
-| Maze risk level, 4 levels (880) | 1,500 | 85.3 | **85.3** | 65.6 | 0.041 / 0.221 |
-| Maze death-within-3, noul (880) | 1,500 | 86.1 | **86.1** | — | — |
-| Maze safest move, 4-way (880) | 1,500 | 29.2 | **44.2** | 41.4 | — |
+| Maze risk level, 4 levels (880) — constant predictor, see below | 1,500 | 85.3 | **85.3** | 65.6 | 0.041 / 0.221 |
+| Maze death-within-3, noul (880) — constant predictor, see below | 1,500 | 86.1 | **86.1** | — | — |
+| Maze safest move, 4-way (880) — as originally asked | 1,500 | 29.2 | **44.2** | 41.4 | — |
+| Maze safest move, re-asked as per-action `Q3(s,a)` + rotations (880, tie-aware) | 10,512 | **68.1** | 44.2 | 55.3 | — |
 
 What this says: where the label is a function of the input — phishing and the rule tickets — a few hundred to a few
 thousand labels beat both the majority answer (by 27–73 points) and the zero-shot model (by 16–35), and give calibrated
